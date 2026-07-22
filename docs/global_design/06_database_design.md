@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | id | UUID | PK：ユーザーID |
 | email | text | UK：account毎に一意（@必須・VOで制御） |
-| first_name | text | 名前（必須） |
-| last_name | text | 苗字（必須） |
+| first_name | text | 名前（null許可しない） |
+| last_name | text | 苗字（null許可しない） |
 | is_active | boolean | アカウント状況（default: true） |
 | provider | text | 認証プロバイダー |
 | provider_account_id | text | プロバイダー側のID |

@@ -332,7 +332,7 @@ CreateTemplateResponse = TemplateResponse;
 #### ビジネスルール:
 
 - 認証必須
-- フィールドのorderは0から始まる連番
+- フィールドのorderは1から始まる連番
 - 新規作成時のisUsedはfalse
 
 テンプレート更新

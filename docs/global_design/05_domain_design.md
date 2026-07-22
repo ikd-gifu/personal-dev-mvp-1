@@ -9,7 +9,7 @@
 | Field | Templateの1つの入力項目 | `id`、`label`、`order`、`isRequired`※ |
 | Note     | Templateを元に作成<br>設計メモ1件               | `id`、`title`、`ownerId`、`sections[]`、`templateId`、`createdAt`、`updatedAt`、`status`                                             |
 | Section  | Noteの1つの項目                            | `id`、`content`、`fieldId`                                                                                                      |
-| Status   | ノートの状態<br>下書き（Draft）か公開（Publish）      | `draft`、`publish`                                                                                                             |
+| Status   | ノートの状態<br>下書き（Draft）か公開（Publish）      | `Draft`、`Publish`                                                                                                             |
 
 > ※ `isRequired`（必須かどうか）は、テンプレートが定義する構造情報として保持する。
 > **MVPでは必須チェックはノート作成・編集フォームの入力バリデーションのみで行い、ドメイン層では検証しない。**
