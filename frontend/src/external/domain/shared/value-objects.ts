@@ -26,3 +26,34 @@ export class Email {
     return new Email(trimmed);
   }
 }
+
+export type NoteStatusValue = "Draft" | "Publish";
+
+/**
+ * Status（VO）
+ *
+ * 用語定義: docs/global_design/03_ubiquitous_language.md「ノート（Note）関連」Status（ステータス）
+ * ルール定義: docs/global_design/05_domain_design.md「VO（Value Object）」
+ *
+ * ルール:
+ * - "Draft"（下書き）または "Publish"（公開）のみ
+ */
+export class Status {
+  private constructor(public readonly value: NoteStatusValue) {}
+
+  static create(raw: string): Status {
+    if (raw !== "Draft" && raw !== "Publish") {
+      throw new Error('Status must be "Draft" or "Publish"');
+    }
+
+    return new Status(raw);
+  }
+
+  isDraft(): boolean {
+    return this.value === "Draft";
+  }
+
+  isPublish(): boolean {
+    return this.value === "Publish";
+  }
+}
