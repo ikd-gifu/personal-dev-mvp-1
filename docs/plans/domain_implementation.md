@@ -4,7 +4,7 @@
 
 ## 目的
 
-`frontend/src/external/domain`配下にDDDスタイルのドメイン層を実装する。Account集約はすでに実装済み。Template集約・Note集約を次のセッションで引き継いで実装するための資料。
+`frontend/src/external/domain`配下にDDDスタイルのドメイン層を実装する。Account集約・Template集約はすでに実装済み。Note集約を次のセッションで引き継いで実装するための資料。
 
 ## 実装パターンについて
 
@@ -13,6 +13,14 @@
 **`frontend/src/external/domain/account/account.ts` と `frontend/src/external/domain/account/interface.ts` の実装を正とし、これに合わせる**
 
 こと。本書には実装パターンの詳細を書き写さない。
+
+**子エンティティ(集約ルートではないもの)のパターンについて**: Accountの`private constructor + static create`パターンは集約ルート(Account/Template)向け。子エンティティであるFieldは、Template実装セッションでの議論の結果、以下の方針に落ち着いた(`frontend/src/external/domain/template/field.ts`参照)。
+
+- 単体で判定できる制約(Fieldならlabel非空・order正数)は子エンティティ自身のコンストラクタで検証する
+- 複数の子をまたぐ制約(Fieldならorder重複)は集約ルート側のコンストラクタで検証する
+- 子エンティティは`static create`のような単体ファクトリを持たない。コンストラクタは(private化できないため)技術的には外部から直接`new`できてしまうが、「集約ルートを経由してのみ生成する」は型システムでは強制せず実装規約として扱う(Account/Emailの関係も同様に規約止まり)。trimは呼び出し側(集約ルートの`create`/`edit`)で行う
+
+Note集約のSectionも同じ子エンティティなので、原則としてこのパターンを踏襲する想定(3-C参照)。ただしSectionはcontent検証自体を行わない(05の注記通り)ため、Fieldほど検証ロジックを持たない可能性が高い。
 
 ## 1. ディレクトリ構成(最終版)
 
@@ -23,7 +31,7 @@ frontend/src/external/domain/
 ├── account/                     # 実装済み
 │   ├── account.ts
 │   └── interface.ts
-├── template/                    # 未実装
+├── template/                    # 実装済み
 │   ├── field.ts                 # Field(子エンティティ)
 │   ├── template.ts              # Template(集約ルート)
 │   └── interface.ts             # TemplateRepository
