@@ -56,14 +56,15 @@ frontend/src/external/domain/
 - 現状: `type NoteStatus = "Draft" | "Publish"` + `parseNoteStatus()`関数のまま(例外throw)。EmailはVOとしてclass化済みだが、NoteStatusは未着手。
 - 要判断: Emailと同様に class化(`private constructor` + `static create`)するか、現状の型+関数のままにするか。Accountの実装パターンに合わせるなら class化が自然だが、ユーザーに確認すること。
 
-### 3-B. template/field.ts, template/template.ts
+### 3-B. template/field.ts, template/template.ts — 実装済み
 
-- Field: 子エンティティ。label/orderの妥当性検証は単体ファクトリを持たせず、Template側(集約ルート)のコンストラクタで検証する(Accountの「コンストラクタで不変条件を一本化する」パターンに準拠)。
+- Field: 子エンティティ。Field単体で判定できる制約(label非空／order(1始まり)が正の整数)はField自身のコンストラクタで検証する。ただし単体ファクトリ(create)は持たせない(Templateからのみ`new Field(...)`で生成する。子は親を通してしか触れないため、Field.create()という公開APIは作らない)。trimはTemplate側(呼び出し側)で行う。
 - Template:
-  - ルール: name非空 ／ 各field.labelは非空 ／ field.order(1始まり)は重複なし → すべてTemplateのコンストラクタで検証する
-  - 05_domain_design.mdの「エンティティ」表の通り、Templateに`createdAt`は存在しない(`updatedAt`のみ)。Accountの`create()`パターン(id/isActive/lastLoginAt/createdAt/updatedAtを明示パラメータ化)に倣う際、存在しない属性を追加しないよう注意する。
-  - 「利用中テンプレートの構造変更制限」はドメインに実装しない(3-3参照)。`isOwnedBy`相当のメソッドのみ用意する。
-- interface.ts: TemplateRepository。`create`か`save`一本化か、Accountの`newCreate`/`save`分離パターンを踏襲するかは、Templateの生成経路(外部境界からの入力があるか)を踏まえて次セッションで判断する。
+  - コンストラクタはprivate。ルール: name非空 ／ field.order(1始まり)は重複なし(Fieldどうしの関係でしか判定できないためTemplate側で検証) → Templateのコンストラクタで検証する
+  - `createdAt`は持たない(`updatedAt`のみ)。`create()`はid・ownerId・fields(各fieldのidも必須)・updatedAtを明示パラメータ化。
+  - `edit(params, now)`: name・fields一式を置き換える(差分更新ではない)。新規fieldのidは呼び出し側で採番済みである前提(3-7)。
+  - 「利用中テンプレートの構造変更制限」はドメインに実装せず(3-3)、`isOwnedBy(accountId)`のみ用意した。
+- interface.ts: TemplateRepositoryは`findById`/`findMany`/`newCreate`/`save`/`delete`。Accountの`newCreate`/`save`分離パターンを踏襲(CreateTemplateRequestが外部境界からの生入力のみを受け取るため、Accountと同様にid採番をRepository側に委ねる構成とした)。
 
 ### 3-C. note/section.ts, note/note.ts
 
