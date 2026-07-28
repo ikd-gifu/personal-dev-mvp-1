@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:17
+    container_name: personal-dev-mvp-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: local_password
+      POSTGRES_DB: personal_dev_mvp
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U app_user -d personal_dev_mvp",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
