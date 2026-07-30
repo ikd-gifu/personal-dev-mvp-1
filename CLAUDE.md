@@ -2,6 +2,7 @@
 
 - `docs/global_design/` …… システム設計書一式(要件、ユースケース、ユビキタス言語、ドメイン設計、DB設計、API設計)
 - `docs/plans/` …… 実装計画・引き継ぎメモ(作業単位の一時文書)
+- `frontend/docs/` …… external層(domain以外。handler・service・client・dto・repository)の実装方針(恒久文書。未作成、Account/Template/Noteの実装を踏まえて作成予定)
 - `frontend/` …… Next.jsアプリケーション本体
 
 ## 情報の優先順位
@@ -10,14 +11,16 @@
 
 1. **`docs/global_design/`** …… 何を実装するかの正(仕様・命名・業務ルール)
 2. **`docs/plans/`** …… 設計書間の矛盾に対する合意済みの解決方針(設計書を補足する。設計書そのものより優先度は低い)
-3. **`src/external/domain/account`** …… どう書くかの参照実装(コーディングパターン・書式)
+3. **`frontend/docs/`** …… external層(domain以外)のどう書くかの正(実装方針が存在する場合、この範囲では`account`実装のコーディングパターンより優先する)
+4. **`src/external/domain/account`** …… ドメイン層のどう書くかの参照実装(コーディングパターン・書式)
 
-コーディングパターンは`account`実装に合わせるが、**`account`の実装内容が設計書と食い違う場合は設計書を優先し、`account`側の逸脱の可能性としてユーザーに報告すること**。
+コーディングパターンは`account`実装に合わせるが、**`account`の実装内容が設計書と食い違う場合は設計書を優先し、`account`側の逸脱の可能性としてユーザーに報告すること**。`frontend/docs/`が対象とするのはdomain層以外(handler/service/client/dto/repository)であり、domain層のコーディングパターンは引き続き`account`実装を参照する。
 
 ## ドキュメント規約
 
 - `docs/global_design/`はシステム設計の正。読み取り専用として扱い、指示なく追記・変更しない
 - `docs/plans/`は実装計画・引き継ぎメモ。作業単位で作成する一時文書であり、設計書と同格には扱わない。作業完了後は削除してよい
+- `frontend/docs/`はexternal層(domain以外)の実装方針。`docs/global_design/`と同様に恒久的な文書として扱い、作成後は指示なく変更しない
 
 ## アーキテクチャ規約
 
