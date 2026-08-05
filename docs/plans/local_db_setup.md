@@ -42,8 +42,10 @@ npx drizzle-kit migrate    # ローカルDBへ適用(適用済みものは再実
 docker compose exec db psql -U app_user -d personal_dev_mvp -c '\d accounts'
 ```
 
-## 実施済み(2026-07-28時点)
+## 実施済み(2026-08-05時点)
 
-- `accounts`テーブルのみ実装・検証済み。`06_database_design.md`のカラム定義と一致することを確認済み。
-- id/createdAt/updatedAt/isActiveはDBデフォルト値(`gen_random_uuid()`/`now()`/`true`)を採用。
-- 他テーブル(templates/fields/notes/sections)は未着手。
+- `accounts`テーブル実装・検証済み。`06_database_design.md`のカラム定義と一致することを確認済み。
+- `templates`/`fields`テーブル実装・検証済み。`06_database_design.md`のカラム定義・制約(UNIQUE(template_id, order)、CHECK(order > 0)、fields→templatesのON DELETE CASCADE)と一致することを確認済み。
+- id/createdAt(またはupdatedAt)はDBデフォルト値(`gen_random_uuid()`/`now()`)を採用(templatesも同様)。
+- `schema.ts`に`templatesRelations`/`fieldsRelations`(drizzle `relations()`)を追加し、`db.query.templates.findFirst({ with: { fields: true, owner: true } })`のようなネスト取得(1クエリ)が動作することを確認済み。
+- 他テーブル(notes/sections)は未着手。
