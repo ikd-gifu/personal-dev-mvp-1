@@ -110,4 +110,19 @@ export class Account {
   get fullName(): string {
     return `${this.firstName} ${this.lastName}`.trim();
   }
+
+  /**
+   * ルール定義: docs/global_design/07_api_design.md
+   * 「Accounts（アカウント）API」CreateOrGetAccountRequest ビジネスルール
+   * 「プロバイダーからnameの形で連携されるので分割する」
+   *
+   * ルール: 半角スペース区切りで最初のトークンをfirstName、残りをlastNameとする
+   */
+  static splitProviderName(name: string): {
+    firstName: string;
+    lastName: string;
+  } {
+    const [firstName = "", ...rest] = name.trim().split(/\s+/);
+    return { firstName, lastName: rest.join(" ") };
+  }
 }
