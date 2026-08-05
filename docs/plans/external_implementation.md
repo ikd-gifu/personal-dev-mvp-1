@@ -80,10 +80,48 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 - 自動テスト(vitest等)の導入・テストコード作成
 - better-auth等、認証基盤本体の導入
 
+## Templateのexternal層実装方針(合意済み、Repository以降は別セッションで実装)
+
+以下はTemplateのテーブル実装セッション中にユーザーと合意した、Repository/Service/DTO/Handler(Step3以降)の設計方針。**このセッションのスコープはテーブル実装(schema.ts)と、それに必要なclient/の実装・動作確認のみ**であり、Repository以降は実装しない。次にTemplateのexternal層に着手するセッションはこの記述を出発点とする。
+
+### Repository(`external/repository/template/template-repository.ts`)
+
+- `findById`/`findMany`(ドメインの`TemplateRepository`ポート実装): `schema.ts`に`relations()`(`templatesRelations`: `fields: many(fields)` / `owner: one(accounts)`、`fieldsRelations`: `template: one(templates)`)を定義し、`db.query.templates.findFirst/findMany({ with: { fields: true } })`のようにネストして取得→ドメインTemplateへ変換(ownerIdのみを持つ。owner本体は持たない)
+- `newCreate`: `db.transaction`内でtemplates INSERT→返ったidでfields複数件INSERT→ドメインTemplateへ変換して返す(Accountの`newCreate`同様、DB書き込み→ドメイン変換の順。Accountの「既知の未修正の問題」を踏襲)
+- `save`(edit時): `db.transaction`内で
+  1. templates UPDATE(name, updatedAt)
+  2. 渡された`template.fields`とDB上の既存fieldsをidで突き合わせ、**差分方式**(DBのみに存在→DELETE、両方に存在→UPDATE、渡された側のみに存在(新規)→明示idでINSERT)を採用する。全削除→再INSERT方式は不採用: `sections→fields`がCASCADEなし参照のため、field.idが変わると既存ノートの記入内容(sections)が孤立・破損するリスクがあるため
+  - 新規fieldのidは呼び出し側(Service)が`crypto.randomUUID()`で事前採番し、`Template.edit()`に渡す(`template.ts`のJSDocどおり)
+  - fieldのDELETEは、将来sectionsが実装された状態で使用中fieldを消そうとするとDBの外部キー制約違反で失敗する(＝「使用中field削除不可」をDB制約が自然に担保する)
+- `delete`: templates DELETE(fieldsはON DELETE CASCADEで自動削除)
+- **`findDetailById(id)` / `findManyDetail(params)`(ドメインportには含めない、読み取り専用の追加メソッド)**: `db.query.templates.findFirst/findMany({ with: { fields: true, owner: true } })`という1クエリで`{ template: Template, owner: { id, firstName, lastName, thumbnail } }`(`TemplateDetail`型)を返す。Drizzleのrelationsクエリは関連先を1回のSQLにまとめて取得する(行ごとに再クエリしない)ためN+1にならない。`TemplateDetail`型は`external/repository/template/`か`external/dto/template/`に定義し、domain/interface.tsには置かない(06_database_design.md「集約間の結合度: 他の集約への参照はIDのみ」の原則により、ドメインportにAccountの実データを混ぜない)
+
+### Service(`external/service/template/template-service.ts`)
+
+- コンストラクタは`TemplateRepository & TemplateDetailReader`(交差型。`TemplateDetailReader`は上記`findDetailById`/`findManyDetail`のみを持つ、domain外で定義する読み取り専用インターフェース)を受け取る。シングルトン配線は`new TemplateService(new DrizzleTemplateRepository())`のまま(1インスタンスが両方を満たす)
+- `createTemplate(ownerId, input)`: `repository.newCreate()`を呼ぶだけ
+- `editTemplate(id, input, accountId)`: 取得→`isOwnedBy`チェック(所有者以外はエラー)→新規fieldにid採番→`template.edit()`→`repository.save()`。**isUsedによる変更制限は今回実装しない**(常に全項目変更可能として扱う。Note実装時に`NoteRepository`(`existsByTemplateId`、単体チェック)を注入し制限ロジックを追加するTODO。`docs/plans/domain_implementation.md`3-3参照)
+- `deleteTemplate(id, accountId)`: 取得→`isOwnedBy`チェック→`repository.delete()`。**isUsedによる削除制限も今回は見送り**(Note実装時、単体チェック用の`existsByTemplateId`を使用)
+- `getTemplateDetailById(id)` / `listTemplateDetails(params)`: `findDetailById`/`findManyDetail`への委譲のみ。**isUsedは今回常に`false`固定**で組み立てる
+  - **Note実装後のisUsed N+1対策(TODO)**: `listTemplateDetails`で一覧の各行にisUsedを付与する際、`existsByTemplateId`を行ごとに呼ぶとN+1になる。`NoteRepository`にバッチ判定用の`existsByTemplateIds(templateIds: string[]): Promise<Set<string>>`(`SELECT DISTINCT template_id FROM notes WHERE template_id IN (...)`の1クエリ)を追加し、`findManyDetail`で取得したtemplate群のidをまとめて渡し、1回のクエリで判定する。単体の`getTemplateDetailById`は元々1件なので既存の`existsByTemplateId`のままでよい
+
+### DTO(`external/dto/template/template-dto.ts`)
+
+- `createTemplateRequestSchema`(name, fields[](idなし)) / `editTemplateRequestSchema`(id, name, fields[](既存fieldはid必須、新規は省略可)) / `templateResponseSchema`(owner・fields・updatedAt(ISO)・`isUsed`を含む)
+- `isUsed`は**今回常に`false`固定**を返す(TODOコメントを付す。将来の対応は上記Serviceの「isUsed N+1対策」参照)
+- `toTemplateResponse(template, owner, isUsed)`: `TemplateService`の`TemplateDetail`(＋isUsed)から変換する
+
+### Handler(`external/handler/template/`)
+
+- `template.query.server.ts`: `templateService.getTemplateDetailById(id)` / `listTemplateDetails(params)`を呼び、`toTemplateResponse()`でDTO変換するだけ。`db`への直接依存はなく、Accountの「Service呼び出しのみ」パターンに準拠する
+- `template.query.action.ts`: `withAuth`でラップ
+- `template.command.server.ts`: zodバリデーション→Service呼び出し→DTO変換
+- `template.command.action.ts`: `withAuth`でラップ(Owner判定は`withAuth`が渡す`accountId`をServiceへそのまま渡す)
+
 ## 次に行うこと
 
-Templateのテーブル実装に着手する。
+Templateのテーブル実装に着手する(このセッションのスコープ)。
 
-1. `external/client/database/schema.ts`に`templates`/`fields`テーブルを追加し、動作確認する(`docs/global_design/06_database_design.md`「templates」「fields」に従う)
-2. Templateのexternal層(Repository→Service→dto→Handler)を、上記「Accountの実装で確立したパターン」に沿って実装する。ただし「テンプレートがノートで使用中(isUsed)の場合の変更制限」はNoteリポジトリへの問い合わせが必要なため、アプリケーションサービス層の責務として設計を検討する(`docs/plans/domain_implementation.md`3-3参照)
+1. `external/client/database/schema.ts`に`templates`/`fields`テーブルと上記`relations()`を追加し、動作確認する(`docs/global_design/06_database_design.md`「templates」「fields」に従う)
+2. (別セッション)Templateのexternal層(Repository→Service→dto→Handler)を、上記「Templateのexternal層実装方針」および「Accountの実装で確立したパターン」に沿って実装する
 3. 完了後、同じ流れでNoteに着手する(`notes`/`sections`テーブル→external層。viewerId付きクエリ等、Note固有の設計は都度確認する)
