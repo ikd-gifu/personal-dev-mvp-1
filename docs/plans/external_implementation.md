@@ -9,16 +9,17 @@
 ## 現状
 
 - domain層: Account/Template/Note すべて実装済み(`frontend/src/external/domain/`)
-- DB層: `accounts`テーブルのみ実装・動作確認済み(`frontend/src/external/client/database/`)。templates/fields/notes/sectionsは未着手
-- external層: **Accountのみ実装・動作確認済み**(`external/repository/account/`、`external/service/account/`、`external/dto/account/`、`external/handler/account/`)。Template/Noteは未着手
+- DB層: `accounts`/`templates`/`fields`テーブル実装・動作確認済み(`frontend/src/external/client/database/`)。notes/sectionsは未着手
+- external層: **Account/Templateが実装済み**(`external/{repository,service,dto,handler}/{account,template}/`)。Noteは未着手
 - 認証基盤: 未導入(後述のプレースホルダで代替中)
 
 ## 進め方
 
 1. ~~Accountのみ、external層を一通り実装する~~ **完了**
 2. **Template・Noteは、集約ごとに「DBスキーマ実装 → external層実装」の順で進める**(Accountの実装順を踏襲)
-   - 例: Templateのテーブル(`templates`/`fields`)を`external/client/database/schema.ts`に追加・動作確認 → Templateのexternal層(Repository→Service→dto→Handler)を実装。完了後、同じ流れでNoteに着手
-   - Templateは子エンティティField、Noteは子エンティティSection＋Template参照＋viewerId付きクエリなど、Accountにはない複雑さがあるため、下記「Accountの実装で確立したパターン」をそのまま当てはめられない箇所がある。都度ユーザーに確認する
+   - Template: テーブル実装(`templates`/`fields`) **完了** → external層(Repository→Service→dto→Handler) **完了**(詳細は下記「Templateのexternal層実装方針」の「実装時の補足」を参照)
+   - Note: 同じ流れで着手する(次はテーブル実装+client配下から。別チャットで継続)
+   - Templateは子エンティティField、Noteは子エンティティSection＋Template参照＋viewerId付きクエリなど、Accountにはない複雑さがあるため、「Accountの実装で確立したパターン」をそのまま当てはめられない箇所がある。都度ユーザーに確認する
 3. Account/Template/Noteの3つが揃った時点で、共通パターンを`frontend/docs/`に文書化する(恒久的な設計方針。CLAUDE.mdの「情報の優先順位」に新設した第3階層)
 4. 文書化した方針に沿って、必要なら実装を整理し直す
 
@@ -39,6 +40,7 @@
 
 - ユースケース(業務フロー)の組み立てのみを担う。「DBアクセスの詳細」はRepository、「業務ルール」はEntity(ドメイン層)に委ねる
 - **コンストラクタインジェクション**で`<集約名>Repository`(インターフェース型)を受け取る。Service自身は具象のRepository実装を知らない
+  - 例外: Templateのように、ドメインportに含めない読み取りモデル(JOINを伴う表示用データ)を別途持つ集約では、コマンド側(`<集約名>Repository`)とクエリ側(読み取りモデル用インターフェース)を別引数で受け取る。詳細は下記「Templateのexternal層実装方針」Service参照
 - ファイル末尾で`export const <集約名>Service = new <集約名>Service(new Drizzle<集約名>Repository());`のようにシングルトンをexportする
 - **「現在ログイン中のユーザー」というセッションの概念をServiceに持ち込まない**。Serviceは`id`を渡されれば処理するだけにする。「今誰がログインしているか」の解決はHandler層(`*.query.server.ts`/`*.action.ts`、`withAuth`経由)の責務とする
 
@@ -80,9 +82,9 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 - 自動テスト(vitest等)の導入・テストコード作成
 - better-auth等、認証基盤本体の導入
 
-## Templateのexternal層実装方針(合意済み、Repository以降は別セッションで実装)
+## Templateのexternal層実装方針(実装完了)
 
-以下はTemplateのテーブル実装セッション中にユーザーと合意した、Repository/Service/DTO/Handler(Step3以降)の設計方針。**このセッションのスコープはテーブル実装(schema.ts)と、それに必要なclient/の実装・動作確認のみ**であり、Repository以降は実装しない。次にTemplateのexternal層に着手するセッションはこの記述を出発点とする。
+以下はTemplateのテーブル実装セッション中に合意した設計方針で、その後別セッションでRepository〜Handlerまで実装済み。Note実装時は、この記述と末尾の「実装時の補足」を、Account実装と同格の参照実装として扱ってよい。
 
 ### Repository(`external/repository/template/template-repository.ts`)
 
@@ -98,7 +100,7 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 
 ### Service(`external/service/template/template-service.ts`)
 
-- コンストラクタは`TemplateRepository & TemplateDetailReader`(交差型。`TemplateDetailReader`は上記`findDetailById`/`findManyDetail`のみを持つ、domain外で定義する読み取り専用インターフェース)を受け取る。シングルトン配線は`new TemplateService(new DrizzleTemplateRepository())`のまま(1インスタンスが両方を満たす)
+- コンストラクタは`repository: TemplateRepository`(集約の読み書き＝コマンド側)と`detailReader: TemplateDetailReader`(上記`findDetailById`/`findManyDetail`のみを持つ、domain外で定義する読み取りモデル専用インターフェース＝クエリ側)を**別々の引数**で受け取る。Handler層のCQRS分離(`*.query.server.ts` / `*.command.server.ts`)と同じ発想を、Serviceのコンストラクタでも可視化するため、交差型(1引数)にはしない。シングルトン配線は`export const templateService = new TemplateService(new DrizzleTemplateRepository(), new DrizzleTemplateRepository());`(具象クラスは同一だが、コマンド側・クエリ側それぞれの引数として2回渡す)
 - `createTemplate(ownerId, input)`: `repository.newCreate()`を呼ぶだけ
 - `editTemplate(id, input, accountId)`: 取得→`isOwnedBy`チェック(所有者以外はエラー)→新規fieldにid採番→`template.edit()`→`repository.save()`。**isUsedによる変更制限は今回実装しない**(常に全項目変更可能として扱う。Note実装時に`NoteRepository`(`existsByTemplateId`、単体チェック)を注入し制限ロジックを追加するTODO。`docs/plans/domain_implementation.md`3-3参照)
 - `deleteTemplate(id, accountId)`: 取得→`isOwnedBy`チェック→`repository.delete()`。**isUsedによる削除制限も今回は見送り**(Note実装時、単体チェック用の`existsByTemplateId`を使用)
@@ -118,10 +120,23 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 - `template.command.server.ts`: zodバリデーション→Service呼び出し→DTO変換
 - `template.command.action.ts`: `withAuth`でラップ(Owner判定は`withAuth`が渡す`accountId`をServiceへそのまま渡す)
 
+### 実装時の補足(計画からの変更点)
+
+- **Service**: 当初案の2引数(`repository`/`detailReader`)に加え、owner詳細解決のため`accountRepository: AccountRepository`(Account集約のドメインport)を3つ目の引数として追加した。`createTemplate`/`editTemplate`は書き込み後に`accountRepository.findById(ownerId)`でowner情報を取得し、`getTemplateDetailById`/`listTemplateDetails`と同じ`{ template, owner, isUsed }`の形(`TemplateDetailResult`)に統一して返す。AccountService(ユースケース層)ではなくAccountRepository(ポート)を注入した理由: 他集約への依存はユースケース層同士より、ポート(インターフェース)どうしの方が結合が弱いため
+- **DTO**: `createTemplateRequestSchema`/`editTemplateRequestSchema`のfieldsに`.refine()`で「orderは1から始まる連番」チェックを追加(ドメイン層は正整数・重複禁止のみ検証のため、07_api_design.mdのビジネスルールをDTO境界で補完。CLAUDE.mdの「DTO側は同じかより厳密なルールにする」に基づく)。加えて`getTemplateByIdRequestSchema`/`listTemplatesRequestSchema`をquery系にも新設し、id/ownerIdのuuid形式を境界で検証する(下記「既知の不整合」参照)
+- **Handler(query系)**: `template.query.server.ts`/`template.query.action.ts`はどちらも上記DTOスキーマで`.parse()`する(account参照実装のquery系にはない検証を追加)
+- **Handler(command系)**: `input: unknown`のまま維持し、DTO型(`CreateTemplateRequest`等)には変更しなかった(account実装と同じ方針)。`unknown`はnarrowingされるまでプロパティアクセスを一切許さないため、「`.parse()`を経ずに未検証の値を誤って使う」ミスをコンパイラのレベルで機械的に防げる。DTO型で受け取る案(`request: CreateTemplateRequest`)も一度試したが、この安全網を優先し不採用とした
+
+## 既知の不整合(将来対応)
+
+- **境界(id/クエリパラメータ)のuuid検証がAccount/Templateで非対称**: Templateの`getTemplateByIdQuery`/`getTemplateByIdAction`・`listTemplatesQuery`/`listTemplatesAction`は、DTOのzodスキーマ(`getTemplateByIdRequestSchema`/`listTemplatesRequestSchema`)で`id`/`ownerId`のuuid形式を検証している(`.query.action.ts`と`.query.server.ts`の両方で検証。`.query.action.ts`はクライアントから直接呼び出せるServer Actionのため、型(`string`)だけでは実行時の不正な値を防げないことへの対策)。一方`account.query.server.ts`/`account.query.action.ts`の`getAccountByIdQuery`/`getAccountByIdAction`/`getCurrentAccountAction`は同様の検証を行わず、`id: string`をそのままDrizzleへ渡している。不正な形式のidが渡されると、DB(uuid列)側で未処理の例外(500相当)になりうる。
+  - TODO: Note実装時、またはAccountの見直しセッションで、`account.query.server.ts`/`account.query.action.ts`にも同様のuuid検証を追加し、非対称を解消する
+
 ## 次に行うこと
 
-Templateのテーブル実装に着手する(このセッションのスコープ)。
+Templateのexternal層は完了。次はNoteに着手する(別チャットで継続)。
 
-1. `external/client/database/schema.ts`に`templates`/`fields`テーブルと上記`relations()`を追加し、動作確認する(`docs/global_design/06_database_design.md`「templates」「fields」に従う)
-2. (別セッション)Templateのexternal層(Repository→Service→dto→Handler)を、上記「Templateのexternal層実装方針」および「Accountの実装で確立したパターン」に沿って実装する
-3. 完了後、同じ流れでNoteに着手する(`notes`/`sections`テーブル→external層。viewerId付きクエリ等、Note固有の設計は都度確認する)
+1. Note集約のテーブル(`notes`/`sections`)を`external/client/database/schema.ts`に追加し、`relations()`を含めて動作確認する(`docs/global_design/06_database_design.md`「notes」「sections」に従う。Templateのテーブル実装セッションと同じ進め方)
+2. (別セッション)Noteのexternal層(Repository→Service→dto→Handler)を、「Accountの実装で確立したパターン」および今回のTemplate実装(「実装時の補足」含む)を参照実装として実装する
+3. Note固有の複雑さ(Section子エンティティ、Template参照、viewerId付きクエリ、Template使用チェック`existsByTemplateId`/バッチ判定用`existsByTemplateIds`の実装など)は都度ユーザーに確認する
+4. Note実装完了後、Template側に残るTODO(isUsedの実装、Account側のuuid検証追加など。上記「既知の不整合」参照)を反映する
