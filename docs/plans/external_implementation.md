@@ -127,6 +127,49 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 - **Handler(query系)**: `template.query.server.ts`/`template.query.action.ts`はどちらも上記DTOスキーマで`.parse()`する(account参照実装のquery系にはない検証を追加)
 - **Handler(command系)**: `input: unknown`のまま維持し、DTO型(`CreateTemplateRequest`等)には変更しなかった(account実装と同じ方針)。`unknown`はnarrowingされるまでプロパティアクセスを一切許さないため、「`.parse()`を経ずに未検証の値を誤って使う」ミスをコンパイラのレベルで機械的に防げる。DTO型で受け取る案(`request: CreateTemplateRequest`)も一度試したが、この安全網を優先し不採用とした
 
+## Noteのexternal層実装方針(合意事項。実装セッション前の調査で確認済み)
+
+Note集約のテーブル実装(`notes`/`sections`、`schema.ts`)は完了済み。以下はexternal層(Repository〜Handler)実装前に合意した設計方針。Templateの「実装時の補足」と同様、実装セッションでは参照実装として扱ってよいが、実装中に見つかった変更点は都度この節に追記すること。
+
+### sections検証方針(ドメイン実装計画3-Cから移動・確定)
+
+- **sectionsのfieldIdはtemplate.fieldsのfieldIdと過不足なく一致するかを厳密に検証する**(合意済み)
+- 検証場所は**Note Service層**(ドメイン層ではない)。Templateという別集約の実体(fields)を参照する必要があるため、Note単体のコンストラクタでは判定できない(3-3のTemplate使用中チェックと同じ考え方)
+- そのため`NoteService`のコンストラクタは`repository`(`NoteRepository`)・`detailReader`(下記`NoteDetailReader`)・`accountRepository`(`AccountRepository`)に加え、**`templateRepository: TemplateRepository`**を注入する(Template.fieldsを取得するため)
+
+### Repository(`external/repository/note/note-repository.ts`)
+
+- `findById`/`findMany`(ドメインの`NoteRepository`ポート実装): `db.query.notes.findFirst/findMany({ with: { sections: true } })`で取得→ドメインNoteへ変換。`findMany`は`viewerId`必須("公開済みまたは自分のノート"をWHERE句で実装。07「ビジネスルール」)＋`q`/`status`/`templateId`/`ownerId`の任意フィルタ
+- `newCreate`: `db.transaction`内でnotes INSERT→返ったidでsections複数件INSERT→ドメインNoteへ変換して返す(Account/Templateの`newCreate`と同じ「DB書き込み→ドメイン変換」の順序を踏襲)
+- `save`(edit時): `db.transaction`内でnotes UPDATE(title/status/updatedAt)＋sections UPDATE(content)のみ。Note.edit()はtemplateIdを受け取らず、sectionの追加・削除も発生しない(fieldId構成は不変のため)ので、Templateのような差分INSERT/DELETEは不要で全件UPDATEのみでよい
+- `delete`: notes DELETE(sectionsはON DELETE CASCADEで自動削除)
+- `existsByTemplateId(templateId)`: `SELECT EXISTS(SELECT 1 FROM notes WHERE template_id = ...)`。**今回のNote実装内で実装する**(NoteRepositoryポートに定義済みのため)。ただし`TemplateService`側(isUsed判定)への配線は、Note external層が実装・動作確認できた後の別ステップで行う(合意事項4)
+- **`findDetailById(id)` / `findManyDetail(params)`(ドメインportには含めない読み取り専用の追加メソッド)**: `db.query.notes.findFirst/findMany({ with: { sections: { with: { field: true } }, owner: true } })`で1クエリ取得し、`{ note: Note, owner: {...}, sections: [{ ...section, fieldLabel, isRequired }] }`(`NoteDetail`型)を返す。07_api_design.mdの`NoteResponse.sections`が`fieldLabel`/`isRequired`を要求するため、Templateの`TemplateDetail`と同じ「ドメインportに含めない結合済み読み取りモデル」パターンを踏襲する
+
+### Service(`external/service/note/note-service.ts`)
+
+- コンストラクタは`repository: NoteRepository`・`detailReader: NoteDetailReader`・`accountRepository: AccountRepository`・`templateRepository: TemplateRepository`の4つ(Templateの3引数パターンに、fieldId検証・sections自動生成用の`templateRepository`を追加)
+- `createNote(ownerId, input)`:
+  1. `templateRepository.findById(input.templateId)`でTemplateを取得(存在しない場合はエラー。07「指定されたテンプレートが存在する必要がある」)
+  2. `input.sections`が未指定の場合、Template.fieldsから空content(`""`)のsectionsを自動生成する(07「sectionsが未指定の場合、テンプレートのフィールドから空のセクションを自動生成」)
+  3. `input.sections`が指定されている場合は、fieldId集合がTemplate.fieldsのfieldId集合と過不足なく一致するか検証する(上記「sections検証方針」)
+  4. `repository.newCreate()`を呼ぶ
+- `editNote(id, input, accountId)`: 取得→`isOwnedBy`チェック→`note.edit()`(templateIdは受け取らない。3-4)→`repository.save()`
+- `deleteNote(id, accountId)`: 取得→`isOwnedBy`チェック→`repository.delete()`
+- `publishNote(id, accountId)`/`unpublishNote(id, accountId)`: 取得→`accountRepository.findById(accountId)`→`note-publication-policy.ts`の`canPublish`/`canUnpublish`で判定→`note.publish()`/`note.unpublish()`→`repository.save()`
+- `getNoteDetailById(id, viewerId)`: `detailReader.findDetailById(id)`で取得→`note.canBeViewedBy(viewerId)`が`false`ならnull相当を返す(07「見つからない場合、nullを返す」を「閲覧不可の場合もnullを返す」まで含めるかは実装時に要確認)
+- `listNoteDetails(params)`: `params.viewerId`を`detailReader.findManyDetail()`にそのまま渡す(公開済み/自分のノードのみ返す絞り込みはRepository層のWHERE句で行う)
+
+### DTO(`external/dto/note/note-dto.ts`)
+
+- `createNoteRequestSchema`(title, templateId, sections?(fieldIdなし省略可)) / `editNoteRequestSchema`(id, title, templateId(受け取るがServiceでは無視。3-4), sections(id必須, content)) / `noteResponseSchema`(owner・sections(fieldLabel/isRequired含む)・status・timestamps(ISO))
+- `getNoteByIdRequestSchema`/`listNotesRequestSchema`をquery系にも新設し、id/templateId/ownerIdのuuid形式を境界で検証する(Templateの「実装時の補足」と同じ方針。Accountとの非対称は「既知の不整合」参照)
+
+### Handler(`external/handler/note/`)
+
+- `note.query.server.ts`/`note.query.action.ts`: 一覧・詳細取得。詳細取得時は`withAuth`が渡す`accountId`を`viewerId`としてServiceへ渡す
+- `note.command.server.ts`/`note.command.action.ts`: 作成・更新・削除・公開(`/publish`)・非公開(`/unpublish`)。publish/unpublishは07のとおり`POST /api/notes/:id/publish`(action形式)に対応する専用コマンド関数を用意する
+
 ## 既知の不整合(将来対応)
 
 - **境界(id/クエリパラメータ)のuuid検証がAccount/Templateで非対称**: Templateの`getTemplateByIdQuery`/`getTemplateByIdAction`・`listTemplatesQuery`/`listTemplatesAction`は、DTOのzodスキーマ(`getTemplateByIdRequestSchema`/`listTemplatesRequestSchema`)で`id`/`ownerId`のuuid形式を検証している(`.query.action.ts`と`.query.server.ts`の両方で検証。`.query.action.ts`はクライアントから直接呼び出せるServer Actionのため、型(`string`)だけでは実行時の不正な値を防げないことへの対策)。一方`account.query.server.ts`/`account.query.action.ts`の`getAccountByIdQuery`/`getAccountByIdAction`/`getCurrentAccountAction`は同様の検証を行わず、`id: string`をそのままDrizzleへ渡している。不正な形式のidが渡されると、DB(uuid列)側で未処理の例外(500相当)になりうる。
@@ -134,9 +177,9 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 
 ## 次に行うこと
 
-Templateのexternal層は完了。次はNoteに着手する(別チャットで継続)。
+Templateのexternal層は完了。Note集約のテーブル実装(`notes`/`sections`、`relations()`)も完了・検証済み(`docs/plans/local_db_setup.md`「実施済み」参照)。次はNoteのexternal層(別チャットで継続)。
 
-1. Note集約のテーブル(`notes`/`sections`)を`external/client/database/schema.ts`に追加し、`relations()`を含めて動作確認する(`docs/global_design/06_database_design.md`「notes」「sections」に従う。Templateのテーブル実装セッションと同じ進め方)
-2. (別セッション)Noteのexternal層(Repository→Service→dto→Handler)を、「Accountの実装で確立したパターン」および今回のTemplate実装(「実装時の補足」含む)を参照実装として実装する
-3. Note固有の複雑さ(Section子エンティティ、Template参照、viewerId付きクエリ、Template使用チェック`existsByTemplateId`/バッチ判定用`existsByTemplateIds`の実装など)は都度ユーザーに確認する
-4. Note実装完了後、Template側に残るTODO(isUsedの実装、Account側のuuid検証追加など。上記「既知の不整合」参照)を反映する
+1. Noteのexternal層(Repository→Service→dto→Handler)を、「Accountの実装で確立したパターン」「Templateのexternal層実装方針」、および上記「Noteのexternal層実装方針(合意事項)」を参照実装として実装する
+2. Note固有の複雑さ(Section子エンティティ、Template参照、viewerId付きクエリなど)で「Noteのexternal層実装方針」に書かれていない判断が必要になった場合は都度ユーザーに確認する
+3. `existsByTemplateId`はNote実装内で実装するが、`TemplateService`側(isUsed判定)への配線は行わない。Note external層が実装・動作確認できてから、別ステップとして着手する
+4. 上記3のTemplate側配線の際、Template側に残る他のTODO(isUsedのバッチ判定`existsByTemplateIds`、Account側のuuid検証追加など。上記「既知の不整合」参照)もあわせて反映する

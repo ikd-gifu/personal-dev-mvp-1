@@ -78,7 +78,9 @@ frontend/src/external/domain/
 
 - Section: 子エンティティ。content検証なし(空文字許容。05の注記通り、MVPでは必須チェックをドメイン層で行わない)。単体ファクトリなし。
 - Note:
-  - `create()`のsections検証方針(fieldIdの過不足チェックを行うか等)は**未確定**。フロントエンド実装時に具体的に検討する。ここに書かれていた「sectionsのfieldIdがtemplate.fieldsと過不足なく一致するかを検証する」という記述は、過去のセッションで私(Claude)が05/07から導いた仮の提案であり、ユーザーが合意した決定事項ではない。実装前に必ず確認すること。
+  - `create()`のsections検証方針(fieldIdの過不足チェック)は**合意済み**: sectionsのfieldIdがtemplate.fieldsのfieldIdと過不足なく一致するかを**厳密に検証する**。
+    - ただし検証場所はドメイン層(Note)ではなく**Service層(アプリケーションサービス)**とする。Note単体(このコンストラクタ)ではTemplateという別集約の実体を参照できないため、「単一集約内で判定できない制約はドメイン層で検証しない」という既存の原則(Account/Template/Note共通)に従う。Templateの「利用中テンプレートの構造変更制限」(3-3)と同じ考え方。
+    - external層実装時(Note Service)で、Template.fieldsのfieldId集合とsections(またはCreateNoteRequest.sections)のfieldId集合を突き合わせ、不一致があれば例外を投げる実装とする。
   - `edit()`: title / sectionsのcontentのみ変更可能。templateIdは受け取らない(3-4)
   - `publish()` / `unpublish()`: Draft⇄Publishの状態遷移が不正な場合は例外(throw new Error)
   - `canBeViewedBy(viewerId)`: Publishは誰でも閲覧可、Draftは本人のみ
