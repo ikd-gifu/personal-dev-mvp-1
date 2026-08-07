@@ -15,6 +15,13 @@
       "when": 1785918752059,
       "tag": "0001_lively_the_hood",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786071399563,
+      "tag": "0002_flashy_nick_fury",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  index,
   integer,
   pgTable,
   text,
@@ -84,6 +85,71 @@ export const fields = pgTable(
   ],
 );
 
+/**
+ * notes（ノート）
+ *
+ * テーブル定義: docs/global_design/06_database_design.md「notes（ノート）」
+ *
+ * id・createdAt・updatedAt・status はDBのデフォルト値を未指定時のフォールバックとする。
+ * NoteRepository.newCreate() がこれらを受け取らない設計のため（accounts/templatesと同様）。
+ * templateId → templates.id、ownerId → accounts.id はいずれもCASCADEなし
+ * （集約を跨ぐ参照。06「ON DELETE CASCADEの使い分け」）。
+ */
+export const notes = pgTable(
+  "notes",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    title: text("title").notNull(),
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => templates.id),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => accounts.id),
+    status: text("status").notNull().default("Draft"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (table) => [
+    index("notes_owner_idx").on(table.ownerId),
+    index("notes_template_idx").on(table.templateId),
+    index("notes_updated_at_idx").on(table.updatedAt.desc()),
+  ],
+);
+
+/**
+ * sections（ノートのセクション）
+ *
+ * テーブル定義: docs/global_design/06_database_design.md「sections（ノートのセクション）」
+ *
+ * id はDBのデフォルト値を未指定時のフォールバックとする。
+ * NoteRepository.newCreate() が section.id を受け取らない設計のため。
+ * noteId → notes.id はCASCADEあり（同一集約。notes削除時にsectionsも削除）。
+ * fieldId → fields.id はCASCADEなし（集約を跨ぐ参照）。
+ */
+export const sections = pgTable(
+  "sections",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    noteId: uuid("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    fieldId: uuid("field_id")
+      .notNull()
+      .references(() => fields.id),
+    content: text("content").notNull().default(""),
+  },
+  (table) => [
+    unique().on(table.noteId, table.fieldId),
+    index("sections_note_idx").on(table.noteId),
+    index("sections_field_idx").on(table.fieldId),
+  ],
+);
+
 export const templatesRelations = relations(templates, ({ many, one }) => ({
   fields: many(fields),
   owner: one(accounts, {
@@ -96,5 +162,28 @@ export const fieldsRelations = relations(fields, ({ one }) => ({
   template: one(templates, {
     fields: [fields.templateId],
     references: [templates.id],
+  }),
+}));
+
+export const notesRelations = relations(notes, ({ many, one }) => ({
+  sections: many(sections),
+  owner: one(accounts, {
+    fields: [notes.ownerId],
+    references: [accounts.id],
+  }),
+  template: one(templates, {
+    fields: [notes.templateId],
+    references: [templates.id],
+  }),
+}));
+
+export const sectionsRelations = relations(sections, ({ one }) => ({
+  note: one(notes, {
+    fields: [sections.noteId],
+    references: [notes.id],
+  }),
+  field: one(fields, {
+    fields: [sections.fieldId],
+    references: [fields.id],
   }),
 }));
