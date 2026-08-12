@@ -1,8 +1,9 @@
 import { and, eq, ilike, inArray } from "drizzle-orm";
 import { db } from "../../client/database";
-import { accounts, fields, templates } from "../../client/database/schema";
-import { Template } from "../../domain/template/template";
+import type { accounts } from "../../client/database/schema";
+import { fields, templates } from "../../client/database/schema";
 import type { TemplateRepository } from "../../domain/template/interface";
+import { Template } from "../../domain/template/template";
 
 /**
  * TemplateDetail（ドメインportには含めない読み取り専用モデル）

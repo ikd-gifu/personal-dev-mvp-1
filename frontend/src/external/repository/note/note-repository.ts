@@ -1,4 +1,4 @@
-import { and, eq, ilike, or } from "drizzle-orm";
+import { and, eq, ilike, inArray, or } from "drizzle-orm";
 import { db } from "../../client/database";
 import {
   type accounts,
@@ -168,6 +168,26 @@ export class DrizzleNoteRepository implements NoteRepository, NoteDetailReader {
     });
 
     return row !== undefined;
+  }
+
+  /**
+   * 用語定義: docs/global_design/03_ubiquitous_language.md
+   * 「テンプレート（Template）関連」TemplateUsageCheck（利用中テンプレチェック）のバッチ版
+   *
+   * templateIdsが空配列の場合、inArray(...)にそのまま渡すとSQLが不正な形になるため
+   * クエリを投げずに空のSetを返す。
+   */
+  async existsByTemplateIds(templateIds: string[]): Promise<Set<string>> {
+    if (templateIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await db
+      .selectDistinct({ templateId: notes.templateId })
+      .from(notes)
+      .where(inArray(notes.templateId, templateIds));
+
+    return new Set(rows.map((row) => row.templateId));
   }
 
   async findDetailById(id: string): Promise<NoteDetail | null> {

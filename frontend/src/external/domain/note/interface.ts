@@ -59,4 +59,13 @@ export interface NoteRepository {
    * Template削除時の利用中判定（アプリケーションサービス層）で使用する。
    */
   existsByTemplateId(templateId: string): Promise<boolean>;
+
+  /**
+   * 用語定義: docs/global_design/03_ubiquitous_language.md
+   * 「テンプレート（Template）関連」TemplateUsageCheck（利用中テンプレチェック）のバッチ版
+   *
+   * 渡されたtemplateIdのうち、実際にNoteで使用中のものだけをSetで返す。
+   * テンプレート一覧のisUsed判定で、1件ずつexistsByTemplateIdを呼ぶN+1を避けるために使う。
+   */
+  existsByTemplateIds(templateIds: string[]): Promise<Set<string>>;
 }

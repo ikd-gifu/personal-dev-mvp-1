@@ -102,10 +102,12 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 
 - コンストラクタは`repository: TemplateRepository`(集約の読み書き＝コマンド側)と`detailReader: TemplateDetailReader`(上記`findDetailById`/`findManyDetail`のみを持つ、domain外で定義する読み取りモデル専用インターフェース＝クエリ側)を**別々の引数**で受け取る。Handler層のCQRS分離(`*.query.server.ts` / `*.command.server.ts`)と同じ発想を、Serviceのコンストラクタでも可視化するため、交差型(1引数)にはしない。シングルトン配線は`export const templateService = new TemplateService(new DrizzleTemplateRepository(), new DrizzleTemplateRepository());`(具象クラスは同一だが、コマンド側・クエリ側それぞれの引数として2回渡す)
 - `createTemplate(ownerId, input)`: `repository.newCreate()`を呼ぶだけ
-- `editTemplate(id, input, accountId)`: 取得→`isOwnedBy`チェック(所有者以外はエラー)→新規fieldにid採番→`template.edit()`→`repository.save()`。**isUsedによる変更制限は今回実装しない**(常に全項目変更可能として扱う。Note実装時に`NoteRepository`(`existsByTemplateId`、単体チェック)を注入し制限ロジックを追加するTODO。`docs/plans/domain_implementation.md`3-3参照)
-- `deleteTemplate(id, accountId)`: 取得→`isOwnedBy`チェック→`repository.delete()`。**isUsedによる削除制限も今回は見送り**(Note実装時、単体チェック用の`existsByTemplateId`を使用)
-- `getTemplateDetailById(id)` / `listTemplateDetails(params)`: `findDetailById`/`findManyDetail`への委譲のみ。**isUsedは今回常に`false`固定**で組み立てる
-  - **Note実装後のisUsed N+1対策(TODO)**: `listTemplateDetails`で一覧の各行にisUsedを付与する際、`existsByTemplateId`を行ごとに呼ぶとN+1になる。`NoteRepository`にバッチ判定用の`existsByTemplateIds(templateIds: string[]): Promise<Set<string>>`(`SELECT DISTINCT template_id FROM notes WHERE template_id IN (...)`の1クエリ)を追加し、`findManyDetail`で取得したtemplate群のidをまとめて渡し、1回のクエリで判定する。単体の`getTemplateDetailById`は元々1件なので既存の`existsByTemplateId`のままでよい
+- `editTemplate(id, input, accountId)`: 取得→`isOwnedBy`チェック(所有者以外はエラー)→`existsByTemplateId`でisUsed判定→使用中なら`assertFieldStructureUnchanged`(下記)でフィールド構造変更を検証→新規fieldにid採番→`template.edit()`→`repository.save()`。**実装済み**(Note実装後の別ステップで、`NoteRepository`を注入して対応)
+  - **`assertFieldStructureUnchanged`(Service内のprivateメソッド)**: isUsed=true時、07_api_design.mdの「フィールドの追加/削除/order変更は不可、name/label/isRequiredの変更は可」を検証する。既存fieldとの比較(id集合の一致・order一致)が必要で、Noteリポジトリへの問い合わせ結果(isUsed)にも依存するため、ドメイン層(`template.ts`)ではなくここに置く(`template.ts`のJSDoc「利用中テンプレートの構造変更制限」の記述どおり)
+  - editはtemplateIdを変えないため、edit前後でisUsedは変わらない。そのため`existsByTemplateId`は1回だけ呼び、構造変更チェックとレスポンスの両方に使い回す
+- `deleteTemplate(id, accountId)`: 取得→`isOwnedBy`チェック→`existsByTemplateId`でisUsed判定→使用中なら`Error("Template is in use")`をthrow→`repository.delete()`。**実装済み**
+- `getTemplateDetailById(id)` / `listTemplateDetails(params)`: `findDetailById`/`findManyDetail`への委譲後、**実装済み**。`getTemplateDetailById`は`existsByTemplateId`(単体)、`listTemplateDetails`は`existsByTemplateIds`(バッチ)でisUsedを実値化
+  - **isUsed N+1対策**: `listTemplateDetails`は一覧のtemplateId群をまとめて`existsByTemplateIds`(`SELECT DISTINCT template_id FROM notes WHERE template_id IN (...)`の1クエリ)に渡し、`Set.has(id)`で判定する(行ごとに`existsByTemplateId`を呼ぶN+1を回避)。単体の`getTemplateDetailById`は元々1件なので`existsByTemplateId`のままでよい
 
 ### DTO(`external/dto/template/template-dto.ts`)
 
@@ -170,16 +172,13 @@ Note集約のテーブル実装(`notes`/`sections`、`schema.ts`)は完了済み
 - `note.query.server.ts`/`note.query.action.ts`: 一覧・詳細取得。詳細取得時は`withAuth`が渡す`accountId`を`viewerId`としてServiceへ渡す
 - `note.command.server.ts`/`note.command.action.ts`: 作成・更新・削除・公開(`/publish`)・非公開(`/unpublish`)。publish/unpublishは07のとおり`POST /api/notes/:id/publish`(action形式)に対応する専用コマンド関数を用意する
 
-## 既知の不整合(将来対応)
+## 既知の不整合(解消済み)
 
-- **境界(id/クエリパラメータ)のuuid検証がAccount/Templateで非対称**: Templateの`getTemplateByIdQuery`/`getTemplateByIdAction`・`listTemplatesQuery`/`listTemplatesAction`は、DTOのzodスキーマ(`getTemplateByIdRequestSchema`/`listTemplatesRequestSchema`)で`id`/`ownerId`のuuid形式を検証している(`.query.action.ts`と`.query.server.ts`の両方で検証。`.query.action.ts`はクライアントから直接呼び出せるServer Actionのため、型(`string`)だけでは実行時の不正な値を防げないことへの対策)。一方`account.query.server.ts`/`account.query.action.ts`の`getAccountByIdQuery`/`getAccountByIdAction`/`getCurrentAccountAction`は同様の検証を行わず、`id: string`をそのままDrizzleへ渡している。不正な形式のidが渡されると、DB(uuid列)側で未処理の例外(500相当)になりうる。
-  - TODO: Note実装時、またはAccountの見直しセッションで、`account.query.server.ts`/`account.query.action.ts`にも同様のuuid検証を追加し、非対称を解消する
+- **境界(id/クエリパラメータ)のuuid検証がAccount/Templateで非対称**: Templateの`getTemplateByIdQuery`/`getTemplateByIdAction`・`listTemplatesQuery`/`listTemplatesAction`は、DTOのzodスキーマ(`getTemplateByIdRequestSchema`/`listTemplatesRequestSchema`)で`id`/`ownerId`のuuid形式を検証している(`.query.action.ts`と`.query.server.ts`の両方で検証)。かつては`account.query.server.ts`/`account.query.action.ts`が同様の検証を行っていなかったが、`account-dto.ts`に`accountIdSchema`(`z.uuid()`単体。Accountは`id`をオブジェクトではなく素の文字列引数で受け取る形状のため、Templateの`z.object({id: z.uuid()})`とは形が異なる)を追加し、`getAccountByIdQuery`/`getAccountByIdAction`双方で`.parse()`するよう解消した(`getCurrentAccountAction`はセッション由来の`accountId`を`getAccountByIdQuery`にそのまま渡す経路のため、そちら側の検証で担保される)。
 
 ## 次に行うこと
 
-Templateのexternal層は完了。Note集約のテーブル実装(`notes`/`sections`、`relations()`)も完了・検証済み(`docs/plans/local_db_setup.md`「実施済み」参照)。次はNoteのexternal層(別チャットで継続)。
+Template⇄Noteの連携(isUsedの実値化、`existsByTemplateIds`によるバッチ判定、`deleteTemplate`/`editTemplate`の使用中制限、Account側uuid検証)まで完了。
 
-1. Noteのexternal層(Repository→Service→dto→Handler)を、「Accountの実装で確立したパターン」「Templateのexternal層実装方針」、および上記「Noteのexternal層実装方針(合意事項)」を参照実装として実装する
-2. Note固有の複雑さ(Section子エンティティ、Template参照、viewerId付きクエリなど)で「Noteのexternal層実装方針」に書かれていない判断が必要になった場合は都度ユーザーに確認する
-3. `existsByTemplateId`はNote実装内で実装するが、`TemplateService`側(isUsed判定)への配線は行わない。Note external層が実装・動作確認できてから、別ステップとして着手する
-4. 上記3のTemplate側配線の際、Template側に残る他のTODO(isUsedのバッチ判定`existsByTemplateIds`、Account側のuuid検証追加など。上記「既知の不整合」参照)もあわせて反映する
+- `TemplateService`は`noteRepository: NoteRepository`を4番目の引数として注入し、`getTemplateDetailById`/`listTemplateDetails`のisUsedを実値化、`deleteTemplate`の使用中削除禁止、`editTemplate`の使用中フィールド構造変更制限(`assertFieldStructureUnchanged`)まで実装・実DBで動作確認済み
+- 残っている既知の項目: 自動テスト(vitest等)の未導入、`newCreate`系の「DB書き込み→ドメイン変換」順序の既知の問題(Account/Template/Note共通)
