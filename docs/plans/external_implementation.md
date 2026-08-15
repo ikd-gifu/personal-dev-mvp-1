@@ -182,3 +182,4 @@ Template⇄Noteの連携(isUsedの実値化、`existsByTemplateIds`によるバ�
 
 - `TemplateService`は`noteRepository: NoteRepository`を4番目の引数として注入し、`getTemplateDetailById`/`listTemplateDetails`のisUsedを実値化、`deleteTemplate`の使用中削除禁止、`editTemplate`の使用中フィールド構造変更制限(`assertFieldStructureUnchanged`)まで実装・実DBで動作確認済み
 - 残っている既知の項目: 自動テスト(vitest等)の未導入、`newCreate`系の「DB書き込み→ドメイン変換」順序の既知の問題(Account/Template/Note共通)
+- **Repository層のトランザクション管理を目標アーキテクチャに合わせて是正する**: 現状、Account/Template/Noteの各Repository(`newCreate`/`save`)は内部で直接`db.transaction()`を呼んでいる。`frontend/docs/07_development_guide.md`の「トランザクション管理」セクションが定める目標アーキテクチャでは、`ITransactionManager`をService層に注入し、`transactionManager.execute()`が返す`tx`をRepositoryのメソッド(`client: DbClient = db`引数)に渡す設計(Repositoryは自分で`db.transaction()`を呼ばない)。現状はこの中間形態(`ITransactionManager`未実装、Repositoryが直接`db.transaction()`を呼ぶ)になっているため、次の実装セッションで是正する
