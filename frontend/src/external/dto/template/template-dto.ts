@@ -47,12 +47,18 @@ export const listTemplatesRequestSchema = z.object({
 
 export type ListTemplatesRequest = z.infer<typeof listTemplatesRequestSchema>;
 
+/**
+ * 07_api_design.md「バリデーションルール（概念）」: name・labelはいずれも
+ * 「1文字以上の文字列」。ドメイン層（template.ts/field.ts）が`!x.trim()`で
+ * 空文字を拒否しているため、CLAUDE.md「DTO側は同じかより厳密なルールにする」に
+ * 従い、境界（DTO）でも`min(1)`を課す。
+ */
 export const createTemplateRequestSchema = z.object({
-  name: z.string(),
+  name: z.string().min(1),
   fields: z
     .array(
       z.object({
-        label: z.string(),
+        label: z.string().min(1),
         order: z.number().int().positive(),
         isRequired: z.boolean(),
       }),
@@ -66,12 +72,12 @@ export type CreateTemplateRequest = z.infer<typeof createTemplateRequestSchema>;
 
 export const editTemplateRequestSchema = z.object({
   id: z.uuid(),
-  name: z.string(),
+  name: z.string().min(1),
   fields: z
     .array(
       z.object({
         id: z.uuid().optional(),
-        label: z.string(),
+        label: z.string().min(1),
         order: z.number().int().positive(),
         isRequired: z.boolean(),
       }),
@@ -125,8 +131,9 @@ export interface DeleteTemplateResponse {
 /**
  * TemplateServiceのTemplateDetail（＋isUsed）から変換する。
  *
- * isUsedは今回常に false 固定で渡される（Note未実装のため）。
- * TODO: Note実装後、実際の使用有無（isUsed）を判定して渡すようService側を更新する。
+ * isUsedは呼び出し元（TemplateService）が渡した値をそのまま使う。新規作成直後
+ * （createTemplate）は必ずfalseだが、取得・一覧（getTemplateDetailById/
+ * listTemplateDetails）はNoteリポジトリへの問い合わせによる実際の使用有無。
  */
 export function toTemplateResponse(
   template: Template,

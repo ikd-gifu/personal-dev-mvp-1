@@ -33,6 +33,10 @@ export interface TemplateDetailResult extends TemplateDetail {
  * transactionManagerは、templates+fieldsという同一集約内の複数テーブル書き込み
  * （createTemplate/editTemplate）をひとつのトランザクションにまとめるために注入する
  * （frontend/docs/07_development_guide.md「トランザクション管理」）。
+ *
+ * 既知の判断: editTemplate/deleteTemplateのrepository.findById()（存在確認）は
+ * 意図的にトランザクションに含めていない。理由はnote-service.tsのNoteServiceの
+ * JSDoc「既知の判断」を参照（読み取り＋書き込みをまとめる案と、その非採用理由）。
  */
 export class TemplateService {
   constructor(

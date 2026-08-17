@@ -29,8 +29,23 @@ export type NoteDetailResult = NoteDetail;
  * 読み取りモデル（クエリ側: detailReader）に加え、accountRepository（owner解決用）・
  * templateRepository（sections検証・fieldLabel解決用）を受け取る。
  * transactionManagerは、notes+sectionsという同一集約内の複数テーブル書き込み
- * （createNote/editNote）をひとつのトランザクションにまとめるために注入する
- * （frontend/docs/07_development_guide.md「トランザクション管理」）。
+ * （createNote/editNote/publishNote/unpublishNote）をひとつのトランザクションに
+ * まとめるために注入する（frontend/docs/07_development_guide.md「トランザクション管理」）。
+ *
+ * 既知の判断: 07_development_guide.mdの「トランザクションが必要な操作」は
+ * 「読み取り＋書き込みのセット（存在確認後の更新・削除）」も対象に含めており、
+ * 「実装例まとめ」表もNote作成の理由を「template取得 + note + sections の作成」と
+ * している。文字通りに読むなら、createNoteのtemplateRepository.findById()や
+ * editNote/deleteNote/publishNote/unpublishNoteのrepository.findById()（存在確認）も
+ * トランザクション内に含めるべきだが、意図的にそうしていない。理由:
+ * このプロジェクトはdb.transaction()の分離レベルを指定しておらず、Postgresの
+ * デフォルト（READ COMMITTED）では単純なSELECTをトランザクション内に含めても
+ * 対象行が自動でロックされないため、読み取りを含めても含めなくても競合防止効果は
+ * 変わらない（SELECT ... FOR SHAREのような明示ロックやSERIALIZABLEへの変更が別途
+ * 必要）。読み取りも含める場合はfindById()にもclient引数を追加する必要があり
+ * （domain配下の各Repositoryポート（interface.ts）の再変更を伴う）、その割に実際の安全性向上がないため、
+ * 書き込み（newCreate/save）のみをtransactionManager.execute()でラップする
+ * 現状の実装を採用した（ユーザーとの合意事項）。
  */
 export class NoteService {
   constructor(

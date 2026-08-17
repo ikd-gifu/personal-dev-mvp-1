@@ -27,8 +27,14 @@ export const listNotesRequestSchema = z.object({
 
 export type ListNotesRequest = z.infer<typeof listNotesRequestSchema>;
 
+/**
+ * 07_api_design.md「バリデーションルール（概念）」: titleは「1文字以上の文字列」。
+ * ドメイン層（note.ts）が`!title.trim()`で空文字を拒否しているため、
+ * CLAUDE.md「DTO側は同じかより厳密なルールにする」に従い、境界（DTO）でも
+ * `min(1)`を課す（template-dto.tsのname/labelと同じ理由）。
+ */
 export const createNoteRequestSchema = z.object({
-  title: z.string(),
+  title: z.string().min(1),
   templateId: z.uuid(),
   sections: z
     .array(
@@ -49,7 +55,7 @@ export type CreateNoteRequest = z.infer<typeof createNoteRequestSchema>;
  */
 export const editNoteRequestSchema = z.object({
   id: z.uuid(),
-  title: z.string(),
+  title: z.string().min(1),
   templateId: z.uuid(),
   sections: z.array(
     z.object({

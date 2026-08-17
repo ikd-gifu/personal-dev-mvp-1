@@ -210,6 +210,19 @@ Account→Template→Noteの順で確認。AccountService/TemplateServiceは元�
 
 **AccountServiceの`createOrGetAccount`(新規登録時)の2回書き込みは意図的に対応しないことにした(既知のリスクとして許容)**: `accountRepository.newCreate()`(INSERT。`lastLoginAt`は受け取らずnullのまま)→`accountRepository.save()`(UPDATE。`updateOnLogin()`で`lastLoginAt`をnullから初回値へ設定)という2回の書き込み。実質的に変化するのは`lastLoginAt`(firstName/lastName/thumbnail/isActiveは1回目と同値の書き直しで無意味)で、「updatedAtを更新しているだけ」ではない。2回の書き込みの間にクラッシュ等が起きると`lastLoginAt = null`のAccount行が残り、`AccountResponse.lastLoginAt`(非nullable)の前提が崩れるリスクはある。`06_database_design.md`の「トランザクション不要な操作: 集約でない単一エンティティ（例: Accountなど）」という一文は「1操作＝1書き込み文」を想定したもので、この「同一テーブルへの2回連続書き込み」を明示的に想定していない可能性が高いが、初回ログイン時のクラッシュという稀なタイミングでのみ発生する軽微なリスクとして、今回は対応しない(トランザクション管理をAccountにまで拡張しない)とユーザーと合意した。
 
+**「読み取り＋書き込みのセット」をトランザクションに含めるかどうかも検討し、含めないことにした**: `07_development_guide.md`の「トランザクションが必要な操作」は「読み取り＋書き込みのセット（データの存在確認後に更新・削除を行う場合）」も対象としており、「実装例まとめ」表もNote作成の理由を「template取得 + note + sections の作成」としている。文字通りに読むなら、`NoteService.createNote`の`templateRepository.findById()`や、`editNote`/`deleteNote`/`publishNote`/`unpublishNote`・`TemplateService`の`editTemplate`/`deleteTemplate`にある`repository.findById()`(存在確認)も`transactionManager.execute()`の内側に含めるべきという設計になる。
+
+検討の結果、**読み取りは引き続きトランザクションの外に置き、書き込み(`newCreate`/`save`)のみをラップする現状の実装を維持することにした**。理由: このプロジェクトは`db.transaction()`の分離レベルを指定しておらず、Postgresのデフォルト(READ COMMITTED)では単純なSELECTをトランザクション内に含めても対象行が自動でロックされないため、読み取りを含めても含めなくても競合防止の実効性は変わらない(`SELECT ... FOR SHARE`等の明示ロックやSERIALIZABLEへの変更が別途必要)。読み取りも含めるには`findById()`にも`client`引数を追加する必要があり(domain配下の各Repositoryポートの再変更を伴う)、その割に実際の安全性向上がないため見送った。この判断は`note-service.ts`(NoteServiceのJSDoc)・`template-service.ts`(TemplateServiceのJSDoc)にもコメントとして残してある。
+
+### dto層(整理完了)
+
+Account→Template→Noteの順で、`07_api_design.md`の「バリデーションルール（概念）」と照らし合わせて確認。2件修正:
+
+- **`name`/`label`/`title`に`min(1)`検証が抜けていた**: `07_api_design.md`「バリデーションルール（概念）」は「title/name/label: 1文字以上の文字列」と明記しているが、`template-dto.ts`の`createTemplateRequestSchema`/`editTemplateRequestSchema`の`name`・`fields[].label`、`note-dto.ts`の`createNoteRequestSchema`/`editNoteRequestSchema`の`title`が`z.string()`のみで下限チェックがなかった。ドメイン層（`template.ts`/`field.ts`/`note.ts`）は`!x.trim()`で空文字を拒否しているため、CLAUDE.md「DTO側は同じかより厳密なルールにする」に反していた。いずれも`.min(1)`を追加して解消(空文字のみを弾く。トリム済み判定まではドメイン層に委ねる従来方針は変更していない)。Accountの`createOrGetAccountRequestSchema.name`(OAuthのdisplay name)は同リストが指す「name」がテンプレート名を指しているため対象外とした
+- **`template-dto.ts`の`toTemplateResponse`のTODOコメントが古かった**: 「isUsedは今回常に false 固定（Note未実装のため）」と書かれていたが、Noteは実装済みで`TemplateService.getTemplateDetailById`/`listTemplateDetails`は既に実際のisUsedを渡している(`createTemplate`直後のみ本当にfalse固定)。実態に合わせてコメントを修正した
+
+`npx tsc --noEmit`・`npx biome check`で確認済み。
+
 ### 次に行うこと
 
-dto→handlerの順で、Account→Template→Noteを整理する。
+handlerを、Account→Template→Noteの順で整理する。
