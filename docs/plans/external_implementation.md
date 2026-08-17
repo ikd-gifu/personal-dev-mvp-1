@@ -192,7 +192,7 @@ Note集約のテーブル実装(`notes`/`sections`、`schema.ts`)は完了済み
 
 - `domain/transaction/transaction-manager.interface.ts`: `ITransactionManager<TClient>`(ジェネリクス。domainはDrizzle型を持ち込まない)を新設
 - `domain/template/interface.ts`/`domain/note/interface.ts`: `TemplateRepository<TClient = unknown>`/`NoteRepository<TClient = unknown>`にジェネリクス化し、`newCreate`/`save`に`client?: TClient`を追加(Accountは単一テーブルでトランザクション不要のため対象外。設計書「実装例まとめ」表の通り)
-- `client/database/index.ts`: `DbClient`型を追加(`NodePgDatabase<typeof schema>`。`typeof db`ではなく`$client`を含まない型にした理由は同ファイルのコメント参照)
+- `client/database/index.ts`: `DbClient`型を追加。`typeof db`と`db.transaction()`のtxの共通の基底型に頼るのではなく、`typeof db | DbTransaction`という明示的なunionにした(理由・経緯は同ファイルのコメント参照。当初`NodePgDatabase<typeof schema>`で実装したが、レビューでunion案に変更した)
 - `repository/transaction/drizzle-transaction-manager.ts`: `DrizzleTransactionManager`(`ITransactionManager<DbClient>`の実装)を新設
 - `repository/template/template-repository.ts`/`repository/note/note-repository.ts`: `newCreate`/`save`内部の`db.transaction()`呼び出しを削除し、`client: DbClient = db`引数を受け取る形に変更
 - `service/template/template-service.ts`/`service/note/note-service.ts`: コンストラクタに`transactionManager: ITransactionManager<DbClient>`を追加し、`createTemplate`/`editTemplate`/`createNote`/`editNote`が`transactionManager.execute()`経由で`repository.newCreate`/`save`を呼ぶ形に変更。シングルトン配線に`new DrizzleTransactionManager()`を追加
@@ -200,6 +200,16 @@ Note集約のテーブル実装(`notes`/`sections`、`schema.ts`)は完了済み
 
 残っている既知の項目(今回のスコープ外、対応不要と判断): `newCreate`系の「DB書き込み→ドメイン変換」順序の既知の問題(Account/Template/Note共通。トランザクション管理とは別の問題)、自動テスト(vitest等)の未導入。
 
+補足(このトランザクション整理自体の位置づけ): 現状の呼び出しパターンでは、Repositoryが自分で`db.transaction()`を持っていても機能的な破綻はない(1 Service操作につき1 Repository書き込み呼び出ししかないため)。今回の変更は「バグ修正」ではなく、「トランザクション境界を決めるのはユースケース(Service)の責務」という`07_development_guide.md`の設計方針に、既存実装を合わせ込む作業という位置づけ。
+
+### service層(整理完了)
+
+Account→Template→Noteの順で確認。AccountService/TemplateServiceは元々一貫しており変更不要。
+
+**NoteServiceで1件、上記のRepository層整理の反映漏れを発見・修正**: `publishNote`/`unpublishNote`が`repository.save()`を`transactionManager.execute()`でラップせず直接呼んでいた。`NoteRepository.save()`は呼ばれるたびに必ずnotes UPDATE＋sections複数UPDATE(2テーブル書き込み)を行うため、`editNote`と同じ理由でトランザクションが必要(`Note.publish()`/`unpublish()`はsectionsの中身自体は変えないが、`save()`の実装が毎回sections全件を再UPDATEするため書き込み経路として`editNote`と同一)。`editNote`と同様に`transactionManager.execute()`でラップする形に修正した。
+
+**AccountServiceの`createOrGetAccount`(新規登録時)の2回書き込みは意図的に対応しないことにした(既知のリスクとして許容)**: `accountRepository.newCreate()`(INSERT。`lastLoginAt`は受け取らずnullのまま)→`accountRepository.save()`(UPDATE。`updateOnLogin()`で`lastLoginAt`をnullから初回値へ設定)という2回の書き込み。実質的に変化するのは`lastLoginAt`(firstName/lastName/thumbnail/isActiveは1回目と同値の書き直しで無意味)で、「updatedAtを更新しているだけ」ではない。2回の書き込みの間にクラッシュ等が起きると`lastLoginAt = null`のAccount行が残り、`AccountResponse.lastLoginAt`(非nullable)の前提が崩れるリスクはある。`06_database_design.md`の「トランザクション不要な操作: 集約でない単一エンティティ（例: Accountなど）」という一文は「1操作＝1書き込み文」を想定したもので、この「同一テーブルへの2回連続書き込み」を明示的に想定していない可能性が高いが、初回ログイン時のクラッシュという稀なタイミングでのみ発生する軽微なリスクとして、今回は対応しない(トランザクション管理をAccountにまで拡張しない)とユーザーと合意した。
+
 ### 次に行うこと
 
-service→dto→handlerの順で、Account→Template→Noteを整理する。
+dto→handlerの順で、Account→Template→Noteを整理する。

@@ -157,7 +157,9 @@ export class NoteService {
     }
 
     const published = note.publish(new Date());
-    await this.repository.save(published);
+    await this.transactionManager.execute((client) =>
+      this.repository.save(published, client),
+    );
 
     return this.buildDetail(published);
   }
@@ -187,7 +189,9 @@ export class NoteService {
     }
 
     const unpublished = note.unpublish(new Date());
-    await this.repository.save(unpublished);
+    await this.transactionManager.execute((client) =>
+      this.repository.save(unpublished, client),
+    );
 
     return this.buildDetail(unpublished);
   }
