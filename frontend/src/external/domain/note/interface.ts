@@ -8,8 +8,14 @@ import type { Note } from "./note";
  *
  * 実装（アダプタ）は external/repository 配下に置く。
  * このファイルは external/domain の一部であり、他レイヤーに依存しない。
+ *
+ * TClient（Drizzleの`DbClient`等）はジェネリクスとし、デフォルトを`unknown`にすることで、
+ * このファイル自体はinfra（Drizzle）の型を持ち込まずに済ませている。newCreate/saveは
+ * notes+sectionsという同一集約内の複数テーブル書き込みのため、Service層が
+ * ITransactionManager（frontend/src/external/domain/transaction/transaction-manager.interface.ts）
+ * 経由で渡すclientを受け取れるようにしている。
  */
-export interface NoteRepository {
+export interface NoteRepository<TClient = unknown> {
   findById(id: string): Promise<Note | null>;
 
   /**
@@ -33,17 +39,20 @@ export interface NoteRepository {
    * 用語定義: docs/global_design/07_api_design.md
    * 「Notes（ノート）API」CreateNoteRequest
    */
-  newCreate(input: {
-    title: string;
-    ownerId: string;
-    templateId: string;
-    sections: {
-      fieldId: string;
-      content: string;
-    }[];
-  }): Promise<Note>;
+  newCreate(
+    input: {
+      title: string;
+      ownerId: string;
+      templateId: string;
+      sections: {
+        fieldId: string;
+        content: string;
+      }[];
+    },
+    client?: TClient,
+  ): Promise<Note>;
 
-  save(note: Note): Promise<void>;
+  save(note: Note, client?: TClient): Promise<void>;
 
   /**
    * 用語定義: docs/global_design/07_api_design.md「Notes（ノート）API」ノート削除

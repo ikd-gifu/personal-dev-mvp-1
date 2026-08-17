@@ -1,4 +1,5 @@
 import { and, eq, ilike, inArray } from "drizzle-orm";
+import type { DbClient } from "../../client/database";
 import { db } from "../../client/database";
 import type { accounts } from "../../client/database/schema";
 import { fields, templates } from "../../client/database/schema";
@@ -46,7 +47,7 @@ export interface TemplateDetailReader {
  * Drizzle（frontend/src/external/client/database）による永続化実装。
  */
 export class DrizzleTemplateRepository
-  implements TemplateRepository, TemplateDetailReader
+  implements TemplateRepository<DbClient>, TemplateDetailReader
 {
   async findById(id: string): Promise<Template | null> {
     const row = await db.query.templates.findFirst({
@@ -70,104 +71,111 @@ export class DrizzleTemplateRepository
   }
 
   /**
+   * トランザクション境界はService層（ITransactionManager経由）が持つため、ここでは
+   * db.transaction()を呼ばない。呼び出し元がclientを渡さない場合はdb（非トランザクション）
+   * にフォールバックする（frontend/docs/07_development_guide.md「トランザクション管理」）。
+   *
    * 既知の未修正の問題: DBへのINSERTを先に実行し、その戻り値をtoDomain()
    * （内部でTemplate.create()を呼ぶ）でドメインモデルへ変換する順序になっている。
    * そのため、ドメイン層の不変条件（field.order重複禁止等）に違反する値でも、
    * 先にDBへ書き込まれてから例外が投げられる（account-repository.tsの
    * newCreateと同じ既知の問題を踏襲）。
    */
-  async newCreate(input: {
-    name: string;
-    ownerId: string;
-    fields: { label: string; order: number; isRequired: boolean }[];
-  }): Promise<Template> {
-    return db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(templates)
-        .values({ name: input.name, ownerId: input.ownerId })
-        .returning();
+  async newCreate(
+    input: {
+      name: string;
+      ownerId: string;
+      fields: { label: string; order: number; isRequired: boolean }[];
+    },
+    client: DbClient = db,
+  ): Promise<Template> {
+    const [row] = await client
+      .insert(templates)
+      .values({ name: input.name, ownerId: input.ownerId })
+      .returning();
 
-      const fieldRows = input.fields.length
-        ? await tx
-            .insert(fields)
-            .values(
-              input.fields.map((field) => ({
-                templateId: row.id,
-                label: field.label,
-                order: field.order,
-                isRequired: field.isRequired,
-              })),
-            )
-            .returning()
-        : [];
+    const fieldRows = input.fields.length
+      ? await client
+          .insert(fields)
+          .values(
+            input.fields.map((field) => ({
+              templateId: row.id,
+              label: field.label,
+              order: field.order,
+              isRequired: field.isRequired,
+            })),
+          )
+          .returning()
+      : [];
 
-      return toDomain(row, fieldRows);
-    });
+    return toDomain(row, fieldRows);
   }
 
-  async save(template: Template): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx
-        .update(templates)
-        .set({ name: template.name, updatedAt: template.updatedAt })
-        .where(eq(templates.id, template.id));
+  /**
+   * トランザクション境界はService層（ITransactionManager経由）が持つため、ここでは
+   * db.transaction()を呼ばない（newCreateと同じ方針）。
+   */
+  async save(template: Template, client: DbClient = db): Promise<void> {
+    await client
+      .update(templates)
+      .set({ name: template.name, updatedAt: template.updatedAt })
+      .where(eq(templates.id, template.id));
 
-      const existingFields = await tx
-        .select({ id: fields.id })
-        .from(fields)
-        .where(eq(fields.templateId, template.id));
-      const existingIds = new Set(existingFields.map((field) => field.id));
-      const nextIds = new Set(template.fields.map((field) => field.id));
+    const existingFields = await client
+      .select({ id: fields.id })
+      .from(fields)
+      .where(eq(fields.templateId, template.id));
+    const existingIds = new Set(existingFields.map((field) => field.id));
+    const nextIds = new Set(template.fields.map((field) => field.id));
 
-      // 差分方式（DBのみに存在→DELETE、両方に存在→UPDATE、渡された側のみに存在→INSERT）。
-      // 全削除→再INSERTは、sections→fieldsがCASCADEなし参照のため不採用
-      // （field.idが変わると既存ノートの記入内容が孤立・破損するリスクがある）。
-      const deleteIds = [...existingIds].filter((id) => !nextIds.has(id));
-      if (deleteIds.length) {
-        await tx.delete(fields).where(inArray(fields.id, deleteIds));
-      }
+    // 差分方式（DBのみに存在→DELETE、両方に存在→UPDATE、渡された側のみに存在→INSERT）。
+    // 全削除→再INSERTは、sections→fieldsがCASCADEなし参照のため不採用
+    // （field.idが変わると既存ノートの記入内容が孤立・破損するリスクがある）。
+    const deleteIds = [...existingIds].filter((id) => !nextIds.has(id));
+    if (deleteIds.length) {
+      await client.delete(fields).where(inArray(fields.id, deleteIds));
+    }
 
-      const fieldsToUpdate = template.fields.filter((field) =>
-        existingIds.has(field.id),
+    const fieldsToUpdate = template.fields.filter((field) =>
+      existingIds.has(field.id),
+    );
+    const fieldsToInsert = template.fields.filter(
+      (field) => !existingIds.has(field.id),
+    );
+
+    // fieldsにはunique(templateId, order)制約があるため、2件のorderを
+    // 入れ替えるような更新を1件ずつ最終値でUPDATEすると、途中経過で
+    // 一時的に重複し制約違反になる。一旦重複しない仮のorderへ退避してから
+    // 最終値へ更新する。
+    const TEMP_ORDER_OFFSET = 1_000_000;
+    for (const field of fieldsToUpdate) {
+      await client
+        .update(fields)
+        .set({ order: field.order + TEMP_ORDER_OFFSET })
+        .where(eq(fields.id, field.id));
+    }
+    for (const field of fieldsToUpdate) {
+      await client
+        .update(fields)
+        .set({
+          label: field.label,
+          order: field.order,
+          isRequired: field.isRequired,
+        })
+        .where(eq(fields.id, field.id));
+    }
+
+    if (fieldsToInsert.length) {
+      await client.insert(fields).values(
+        fieldsToInsert.map((field) => ({
+          id: field.id,
+          templateId: template.id,
+          label: field.label,
+          order: field.order,
+          isRequired: field.isRequired,
+        })),
       );
-      const fieldsToInsert = template.fields.filter(
-        (field) => !existingIds.has(field.id),
-      );
-
-      // fieldsにはunique(templateId, order)制約があるため、2件のorderを
-      // 入れ替えるような更新を1件ずつ最終値でUPDATEすると、途中経過で
-      // 一時的に重複し制約違反になる。一旦重複しない仮のorderへ退避してから
-      // 最終値へ更新する。
-      const TEMP_ORDER_OFFSET = 1_000_000;
-      for (const field of fieldsToUpdate) {
-        await tx
-          .update(fields)
-          .set({ order: field.order + TEMP_ORDER_OFFSET })
-          .where(eq(fields.id, field.id));
-      }
-      for (const field of fieldsToUpdate) {
-        await tx
-          .update(fields)
-          .set({
-            label: field.label,
-            order: field.order,
-            isRequired: field.isRequired,
-          })
-          .where(eq(fields.id, field.id));
-      }
-
-      if (fieldsToInsert.length) {
-        await tx.insert(fields).values(
-          fieldsToInsert.map((field) => ({
-            id: field.id,
-            templateId: template.id,
-            label: field.label,
-            order: field.order,
-            isRequired: field.isRequired,
-          })),
-        );
-      }
-    });
+    }
   }
 
   /**

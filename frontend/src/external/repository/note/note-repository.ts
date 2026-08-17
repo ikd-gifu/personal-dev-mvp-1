@@ -1,4 +1,5 @@
 import { and, eq, ilike, inArray, or } from "drizzle-orm";
+import type { DbClient } from "../../client/database";
 import { db } from "../../client/database";
 import {
   type accounts,
@@ -59,7 +60,9 @@ export interface NoteDetailReader {
  *
  * Drizzle（frontend/src/external/client/database）による永続化実装。
  */
-export class DrizzleNoteRepository implements NoteRepository, NoteDetailReader {
+export class DrizzleNoteRepository
+  implements NoteRepository<DbClient>, NoteDetailReader
+{
   async findById(id: string): Promise<Note | null> {
     const row = await db.query.notes.findFirst({
       where: eq(notes.id, id),
@@ -85,69 +88,75 @@ export class DrizzleNoteRepository implements NoteRepository, NoteDetailReader {
   }
 
   /**
+   * トランザクション境界はService層（ITransactionManager経由）が持つため、ここでは
+   * db.transaction()を呼ばない。呼び出し元がclientを渡さない場合はdb（非トランザクション）
+   * にフォールバックする（frontend/docs/07_development_guide.md「トランザクション管理」）。
+   *
    * 既知の未修正の問題: DBへのINSERTを先に実行し、その戻り値をtoDomain()
    * （内部でNote.create()を呼ぶ）でドメインモデルへ変換する順序になっている。
    * そのため、ドメイン層の不変条件に違反する値でも、先にDBへ書き込まれてから
    * 例外が投げられる（account-repository.ts/template-repository.tsと同じ既知の問題を踏襲）。
    */
-  async newCreate(input: {
-    title: string;
-    ownerId: string;
-    templateId: string;
-    sections: {
-      fieldId: string;
-      content: string;
-    }[];
-  }): Promise<Note> {
-    return db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(notes)
-        .values({
-          title: input.title,
-          ownerId: input.ownerId,
-          templateId: input.templateId,
-        })
-        .returning();
+  async newCreate(
+    input: {
+      title: string;
+      ownerId: string;
+      templateId: string;
+      sections: {
+        fieldId: string;
+        content: string;
+      }[];
+    },
+    client: DbClient = db,
+  ): Promise<Note> {
+    const [row] = await client
+      .insert(notes)
+      .values({
+        title: input.title,
+        ownerId: input.ownerId,
+        templateId: input.templateId,
+      })
+      .returning();
 
-      const sectionRows = input.sections.length
-        ? await tx
-            .insert(sections)
-            .values(
-              input.sections.map((section) => ({
-                noteId: row.id,
-                fieldId: section.fieldId,
-                content: section.content,
-              })),
-            )
-            .returning()
-        : [];
+    const sectionRows = input.sections.length
+      ? await client
+          .insert(sections)
+          .values(
+            input.sections.map((section) => ({
+              noteId: row.id,
+              fieldId: section.fieldId,
+              content: section.content,
+            })),
+          )
+          .returning()
+      : [];
 
-      return toDomain(row, sectionRows);
-    });
+    return toDomain(row, sectionRows);
   }
 
   /**
    * templateId不変（3-4）のため、sectionsの追加・削除は発生しない。
    * Templateのような差分INSERT/DELETEは不要で、全件UPDATEのみでよい。
+   *
+   * トランザクション境界はService層（ITransactionManager経由）が持つため、ここでは
+   * db.transaction()を呼ばない（newCreateと同じ方針）。
    */
-  async save(note: Note): Promise<void> {
-    await db.transaction(async (tx) => {
-      await tx
-        .update(notes)
-        .set({
-          title: note.title,
-          status: note.status.value,
-          updatedAt: note.updatedAt,
-        })
-        .where(eq(notes.id, note.id));
+  async save(note: Note, client: DbClient = db): Promise<void> {
+    await client
+      .update(notes)
+      .set({
+        title: note.title,
+        status: note.status.value,
+        updatedAt: note.updatedAt,
+      })
+      .where(eq(notes.id, note.id));
 
-      for (const section of note.sections) {
-        await tx
-          .update(sections)
-          .set({ content: section.content })
-          .where(eq(sections.id, section.id));
-      }
-    });
+    for (const section of note.sections) {
+      await client
+        .update(sections)
+        .set({ content: section.content })
+        .where(eq(sections.id, section.id));
+    }
   }
 
   /**

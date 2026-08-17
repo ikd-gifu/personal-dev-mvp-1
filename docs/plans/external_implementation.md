@@ -176,10 +176,30 @@ Note集約のテーブル実装(`notes`/`sections`、`schema.ts`)は完了済み
 
 - **境界(id/クエリパラメータ)のuuid検証がAccount/Templateで非対称**: Templateの`getTemplateByIdQuery`/`getTemplateByIdAction`・`listTemplatesQuery`/`listTemplatesAction`は、DTOのzodスキーマ(`getTemplateByIdRequestSchema`/`listTemplatesRequestSchema`)で`id`/`ownerId`のuuid形式を検証している(`.query.action.ts`と`.query.server.ts`の両方で検証)。かつては`account.query.server.ts`/`account.query.action.ts`が同様の検証を行っていなかったが、`account-dto.ts`に`accountIdSchema`(`z.uuid()`単体。Accountは`id`をオブジェクトではなく素の文字列引数で受け取る形状のため、Templateの`z.object({id: z.uuid()})`とは形が異なる)を追加し、`getAccountByIdQuery`/`getAccountByIdAction`双方で`.parse()`するよう解消した(`getCurrentAccountAction`はセッション由来の`accountId`を`getAccountByIdQuery`にそのまま渡す経路のため、そちら側の検証で担保される)。
 
-## 次に行うこと
+## external層整理(frontend/docs作成後、レイヤー単位で実施中)
 
-Template⇄Noteの連携(isUsedの実値化、`existsByTemplateIds`によるバッチ判定、`deleteTemplate`/`editTemplate`の使用中制限、Account側uuid検証)まで完了。
+`frontend/docs/`(01〜08)作成後、これに沿って`external/`(domain以外)をレイヤー単位(client→repository→service→dto→handler、各レイヤーAccount→Template→Noteの順)で整理するセッションを開始した。domainは今回の整理対象外(必要な場合のみ触る。ユーザー合意事項)。
 
-- `TemplateService`は`noteRepository: NoteRepository`を4番目の引数として注入し、`getTemplateDetailById`/`listTemplateDetails`のisUsedを実値化、`deleteTemplate`の使用中削除禁止、`editTemplate`の使用中フィールド構造変更制限(`assertFieldStructureUnchanged`)まで実装・実DBで動作確認済み
-- 残っている既知の項目: 自動テスト(vitest等)の未導入、`newCreate`系の「DB書き込み→ドメイン変換」順序の既知の問題(Account/Template/Note共通)
-- **Repository層のトランザクション管理を目標アーキテクチャに合わせて是正する**: 現状、Account/Template/Noteの各Repository(`newCreate`/`save`)は内部で直接`db.transaction()`を呼んでいる。`frontend/docs/07_development_guide.md`の「トランザクション管理」セクションが定める目標アーキテクチャでは、`ITransactionManager`をService層に注入し、`transactionManager.execute()`が返す`tx`をRepositoryのメソッド(`client: DbClient = db`引数)に渡す設計(Repositoryは自分で`db.transaction()`を呼ばない)。現状はこの中間形態(`ITransactionManager`未実装、Repositoryが直接`db.transaction()`を呼ぶ)になっているため、次の実装セッションで是正する
+### client層(整理完了)
+
+`client/database`(schema.ts/index.ts)は`06_database_design.md`と完全に一致。変更なし。
+
+### repository層(整理完了)
+
+構造(Drizzle\*Repository実装 + 必要な集約のみDetailReader追加実装)はAccount/Template/Noteで一貫しており、変更不要と判断。
+
+唯一の実質的なギャップだった**Repository層のトランザクション管理の是正**(`ITransactionManager`未導入の問題)を対応済み:
+
+- `domain/transaction/transaction-manager.interface.ts`: `ITransactionManager<TClient>`(ジェネリクス。domainはDrizzle型を持ち込まない)を新設
+- `domain/template/interface.ts`/`domain/note/interface.ts`: `TemplateRepository<TClient = unknown>`/`NoteRepository<TClient = unknown>`にジェネリクス化し、`newCreate`/`save`に`client?: TClient`を追加(Accountは単一テーブルでトランザクション不要のため対象外。設計書「実装例まとめ」表の通り)
+- `client/database/index.ts`: `DbClient`型を追加(`NodePgDatabase<typeof schema>`。`typeof db`ではなく`$client`を含まない型にした理由は同ファイルのコメント参照)
+- `repository/transaction/drizzle-transaction-manager.ts`: `DrizzleTransactionManager`(`ITransactionManager<DbClient>`の実装)を新設
+- `repository/template/template-repository.ts`/`repository/note/note-repository.ts`: `newCreate`/`save`内部の`db.transaction()`呼び出しを削除し、`client: DbClient = db`引数を受け取る形に変更
+- `service/template/template-service.ts`/`service/note/note-service.ts`: コンストラクタに`transactionManager: ITransactionManager<DbClient>`を追加し、`createTemplate`/`editTemplate`/`createNote`/`editNote`が`transactionManager.execute()`経由で`repository.newCreate`/`save`を呼ぶ形に変更。シングルトン配線に`new DrizzleTransactionManager()`を追加
+- `npx tsc --noEmit`・`npx biome check`で確認済み(実DBでの動作確認は未実施)
+
+残っている既知の項目(今回のスコープ外、対応不要と判断): `newCreate`系の「DB書き込み→ドメイン変換」順序の既知の問題(Account/Template/Note共通。トランザクション管理とは別の問題)、自動テスト(vitest等)の未導入。
+
+### 次に行うこと
+
+service→dto→handlerの順で、Account→Template→Noteを整理する。

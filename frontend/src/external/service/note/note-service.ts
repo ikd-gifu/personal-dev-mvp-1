@@ -1,3 +1,4 @@
+import type { DbClient } from "../../client/database";
 import type { AccountRepository } from "../../domain/account/interface";
 import type { NoteRepository } from "../../domain/note/interface";
 import type { Note } from "../../domain/note/note";
@@ -6,6 +7,7 @@ import {
   canUnpublish,
 } from "../../domain/services/note-publication-policy";
 import type { TemplateRepository } from "../../domain/template/interface";
+import type { ITransactionManager } from "../../domain/transaction/transaction-manager.interface";
 import { DrizzleAccountRepository } from "../../repository/account/account-repository";
 import type {
   NoteDetail,
@@ -13,6 +15,7 @@ import type {
 } from "../../repository/note/note-repository";
 import { DrizzleNoteRepository } from "../../repository/note/note-repository";
 import { DrizzleTemplateRepository } from "../../repository/template/template-repository";
+import { DrizzleTransactionManager } from "../../repository/transaction/drizzle-transaction-manager";
 
 export type NoteDetailResult = NoteDetail;
 
@@ -25,13 +28,17 @@ export type NoteDetailResult = NoteDetail;
  * コンストラクタは集約の読み書き（コマンド側: repository）、owner/field結合済みの
  * 読み取りモデル（クエリ側: detailReader）に加え、accountRepository（owner解決用）・
  * templateRepository（sections検証・fieldLabel解決用）を受け取る。
+ * transactionManagerは、notes+sectionsという同一集約内の複数テーブル書き込み
+ * （createNote/editNote）をひとつのトランザクションにまとめるために注入する
+ * （frontend/docs/07_development_guide.md「トランザクション管理」）。
  */
 export class NoteService {
   constructor(
-    private readonly repository: NoteRepository,
+    private readonly repository: NoteRepository<DbClient>,
     private readonly detailReader: NoteDetailReader,
     private readonly accountRepository: AccountRepository,
     private readonly templateRepository: TemplateRepository,
+    private readonly transactionManager: ITransactionManager<DbClient>,
   ) {}
 
   /**
@@ -61,12 +68,17 @@ export class NoteService {
       ? validateSections(input.sections, template.fields)
       : template.fields.map((field) => ({ fieldId: field.id, content: "" }));
 
-    const note = await this.repository.newCreate({
-      title: input.title,
-      ownerId,
-      templateId: input.templateId,
-      sections,
-    });
+    const note = await this.transactionManager.execute((client) =>
+      this.repository.newCreate(
+        {
+          title: input.title,
+          ownerId,
+          templateId: input.templateId,
+          sections,
+        },
+        client,
+      ),
+    );
 
     return this.buildDetail(note);
   }
@@ -98,7 +110,9 @@ export class NoteService {
       { title: input.title, sections: input.sections },
       new Date(),
     );
-    await this.repository.save(edited);
+    await this.transactionManager.execute((client) =>
+      this.repository.save(edited, client),
+    );
 
     return this.buildDetail(edited);
   }
@@ -291,4 +305,5 @@ export const noteService = new NoteService(
   new DrizzleNoteRepository(),
   new DrizzleAccountRepository(),
   new DrizzleTemplateRepository(),
+  new DrizzleTransactionManager(),
 );

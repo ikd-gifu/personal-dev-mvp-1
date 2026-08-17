@@ -1,8 +1,10 @@
+import type { DbClient } from "../../client/database";
 import type { AccountRepository } from "../../domain/account/interface";
 import type { NoteRepository } from "../../domain/note/interface";
 import type { Field } from "../../domain/template/field";
 import type { TemplateRepository } from "../../domain/template/interface";
 import type { Template } from "../../domain/template/template";
+import type { ITransactionManager } from "../../domain/transaction/transaction-manager.interface";
 import { DrizzleAccountRepository } from "../../repository/account/account-repository";
 import { DrizzleNoteRepository } from "../../repository/note/note-repository";
 import type {
@@ -10,6 +12,7 @@ import type {
   TemplateDetailReader,
 } from "../../repository/template/template-repository";
 import { DrizzleTemplateRepository } from "../../repository/template/template-repository";
+import { DrizzleTransactionManager } from "../../repository/transaction/drizzle-transaction-manager";
 
 export interface TemplateDetailResult extends TemplateDetail {
   isUsed: boolean;
@@ -27,13 +30,17 @@ export interface TemplateDetailResult extends TemplateDetail {
  * 取得するために注入する（Account集約の内部実装ではなく、そのRepositoryポートのみに依存）。
  * noteRepositoryは、isUsed判定（TemplateUsageCheck）のために注入する
  * （Note集約の内部実装ではなく、そのRepositoryポートのみに依存。accountRepositoryと同じ考え方）。
+ * transactionManagerは、templates+fieldsという同一集約内の複数テーブル書き込み
+ * （createTemplate/editTemplate）をひとつのトランザクションにまとめるために注入する
+ * （frontend/docs/07_development_guide.md「トランザクション管理」）。
  */
 export class TemplateService {
   constructor(
-    private readonly repository: TemplateRepository,
+    private readonly repository: TemplateRepository<DbClient>,
     private readonly detailReader: TemplateDetailReader,
     private readonly accountRepository: AccountRepository,
     private readonly noteRepository: NoteRepository,
+    private readonly transactionManager: ITransactionManager<DbClient>,
   ) {}
 
   /**
@@ -49,11 +56,16 @@ export class TemplateService {
       fields: { label: string; order: number; isRequired: boolean }[];
     },
   ): Promise<TemplateDetailResult> {
-    const created = await this.repository.newCreate({
-      name: input.name,
-      ownerId,
-      fields: input.fields,
-    });
+    const created = await this.transactionManager.execute((client) =>
+      this.repository.newCreate(
+        {
+          name: input.name,
+          ownerId,
+          fields: input.fields,
+        },
+        client,
+      ),
+    );
 
     return this.withOwner(created, false);
   }
@@ -106,7 +118,9 @@ export class TemplateService {
     }));
 
     const edited = template.edit({ name: input.name, fields }, new Date());
-    await this.repository.save(edited);
+    await this.transactionManager.execute((client) =>
+      this.repository.save(edited, client),
+    );
 
     return this.withOwner(edited, isUsed);
   }
@@ -246,4 +260,5 @@ export const templateService = new TemplateService(
   new DrizzleTemplateRepository(),
   new DrizzleAccountRepository(),
   new DrizzleNoteRepository(),
+  new DrizzleTransactionManager(),
 );
