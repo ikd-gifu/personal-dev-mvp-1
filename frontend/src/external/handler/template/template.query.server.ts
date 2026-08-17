@@ -18,8 +18,8 @@ import { templateService } from "../../service/template/template-service";
  *
  * `.query.action.ts`（"use server"）経由でクライアントから直接呼び出せるため、
  * TypeScriptの型だけでは実行時の不正な値を防げない。境界（DTO）でuuid形式を検証する
- * （account.query.server.tsには同様の検証がなく非対称だが、Accountの既知の未修正の
- * 問題として別タスクで揃える）。
+ * （account.query.server.tsも同様にaccountIdSchemaで検証している。既知の不整合の
+ * 解消。docs/plans/external_implementation.md参照）。
  *
  * ビジネスルール: 存在しないIDの場合はnullを返す
  */

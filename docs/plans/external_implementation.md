@@ -223,6 +223,16 @@ Account→Template→Noteの順で、`07_api_design.md`の「バリデーショ�
 
 `npx tsc --noEmit`・`npx biome check`で確認済み。
 
-### 次に行うこと
+### handler層(整理完了)
 
-handlerを、Account→Template→Noteの順で整理する。
+Account→Template→Noteの順で確認。構造(CQRS+DALパターン、`input: unknown`方針、`withAuth`ラップ、境界での多重uuid検証)は3集約で一貫しており、概ね問題なし。
+
+- **`template.query.server.ts`の古いコメントを修正**: `getTemplateByIdQuery`に「account.query.server.tsには同様の検証がなく非対称...別タスクで揃える」とあったが、`account.query.server.ts`は既に`accountIdSchema`で同様に検証しており解消済みだった。実態に合わせて修正した
+
+参考情報(対応不要と判断): `frontend/docs/08_authentication.md`の「ファイル構成」`account.query.server.ts # getAccountByEmailQuery`という記載に対し、実際の`account.query.server.ts`には`getAccountByEmailQuery`が存在しない(`getAccountByIdQuery`のみ)。ただしこれは08_authentication.mdが記述するbetter-auth本体の導入自体が`docs/plans/external_implementation.md`の「認証(プレースホルダ)」節に「別タスク」と明記された未着手事項であり、今回のexternal層整理(既存コードの一貫性確認)の対象外と判断した。
+
+`npx tsc --noEmit`・`npx biome check`で確認済み。
+
+## external層整理(client→repository→service→dto→handler)完了
+
+Account→Template→Noteの3集約について、frontend/docs作成後の整理を全レイヤーで完了した。今回のセッションで見つかった主な修正は上記の各節を参照。次にexternal層へ着手する際は、この節以降に新しい作業単位の記録を追記していくこと。
