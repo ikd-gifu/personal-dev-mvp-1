@@ -123,22 +123,33 @@ socialProviders: {
 - `hooks.after`は、accountレコードが書き込まれた(`internalAdapter.createAccount()`が呼ばれた)**あと**、同じリクエストの終盤で呼ばれる。そのため、`ctx.context.internalAdapter.findAccounts(newSession.user.id)`を呼べば、Cookieという別の永続化経路を一切使わずに、同一リクエスト内で書き込まれたばかりのaccountレコード(`accountId`＝Googleの安定したsub)をそのまま読み返せる
 - この`internalAdapter`経由でのaccount取得は、Better Auth公式のtwo-factor/phone-numberプラグイン自身も同じパターン(自分自身のaccountレコードを取得する)で使っている(バンドルコード内で確認)。「たまたま動く」のではなく、Better Auth内部で実際に使われているアクセスパターン
 
+**Google限定の仕組みではない**: `internalAdapter.createAccount()`/`findAccounts()`は、OAuthコールバック処理(`callback.ts`、ルート`/callback/:id`)自体がGoogle専用ではなく全ソーシャルプロバイダー共通の処理であるため、`providerId`(例: `"google"`, `"github"`)と`accountId`(そのプロバイダー発行の安定したID)をaccountレコードに保存する仕組み自体はプロバイダー非依存。一方、案A(`mapProfileToUser`)は`socialProviders.<provider>.mapProfileToUser`のようにプロバイダーごとの個別設定であり、プロバイダーを追加するたびに同じロジックを複製する必要がある。この点でも案Cの方が設計として優れている。
+
+以下のコード例は、どのプロバイダーで実際にログインしたかを`ctx`から動的に取得し、Google専用の記述(`providerId === "google"`のような固定値)を含まない形にしてある(`ctx.params?.id`部分の正確なプロパティ名は未検証。「案Cの未検証・着手時に確認すべきこと」参照)。
+
 ```ts
-// features/auth/lib/better-auth.ts（イメージ）
+// features/auth/lib/better-auth.ts（イメージ。Google専用ではなく、
+// 有効な socialProviders 全てで動作することを意図した形）
 hooks: {
   after: createAuthMiddleware(async (ctx) => {
     const newSession = ctx.context.newSession;
     if (!newSession) return; // セッションが実際に発行された時だけ実行 = ログイン完全成功のみ
 
+    // ctx.path は "/callback/:id" 形式。:id が今回実際に使われたプロバイダー
+    // (google, github 等)。socialProvidersにどのプロバイダーを追加しても
+    // この部分の変更は不要
+    const providerId = ctx.params?.id;
+    if (!providerId) return;
+
     const accounts = await ctx.context.internalAdapter.findAccounts(newSession.user.id);
-    const googleAccount = accounts.find((a) => a.providerId === "google");
-    if (!googleAccount) return;
+    const linkedAccount = accounts.find((a) => a.providerId === providerId);
+    if (!linkedAccount) return;
 
     await createOrGetAccountCommand({
       email: newSession.user.email,
       name: newSession.user.name || newSession.user.email,
-      provider: "google",
-      providerAccountId: googleAccount.accountId, // ← Googleの安定したsub
+      provider: providerId,
+      providerAccountId: linkedAccount.accountId, // ← プロバイダーが発行する安定したID(Googleならsub)
       thumbnail: newSession.user.image || undefined,
     });
   }),
@@ -158,6 +169,7 @@ hooks: {
 - `ctx.context.internalAdapter`はBetter Authの**内部API(非公開・非ドキュメント化)**。将来のバージョンアップで変更・削除される可能性がある。ただしBetter Auth公式プラグイン自身が同じパターンで使っているため、少なくとも現バージョンでは安定して存在すると考えられる
 - `hooks.after`の`ctx`から`ctx.context.internalAdapter`に実際にアクセスできるか(型定義上・実行時とも)は未検証。`createAuthMiddleware`のコールバックに渡される`ctx`の型を確認する必要がある
 - `findAccounts`の戻り値の形(`providerId`/`accountId`などのフィールド名)も、上記コード例はユーザーの調査に基づく想定であり、実装時に実際の型・戻り値を確認すること
+- `ctx.params?.id`(今回のコールバックで使われたプロバイダーIDの取得方法)も未検証。`createAuthMiddleware`のコールバックに渡される`ctx`が実際に`params`を持つか、プロパティ名が正しいかを実装時に確認する
 
 **次に着手する際は、案A・案Bより先にこちら(案C)を検証すべき。**
 
