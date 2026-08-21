@@ -64,14 +64,48 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
 | `<集約名>.command.server.ts` | `import "server-only"`。書き込み系のDAL関数。zodバリデーション＋Service呼び出し＋DTO変換 |
 | `<集約名>.command.action.ts` | `"use server"`。上記を`withAuth`でラップ。**ただし、正規の業務フローを経ずにクライアントから直接呼ばれると問題がある操作(例: OAuth登録のような外部境界からの新規作成)は`.action`を作らず`.server`のみに留める**。操作ごとにこの要否を検討し、判断に迷う場合はユーザーに確認する |
 
-### 認証(プレースホルダ)
+### 認証(2026-08-21時点: better-auth導入済み。Googleログインを実装し、下記2件の不具合を修正済み。ログアウトは未実装)
 
 - `frontend/src/features/auth/servers/`に認証まわりの共通処理がある。Template/Noteの`.action`ファイルもこれを再利用する
-  - `session.server.ts`: `getSessionServer()`(**未実装。呼ぶと必ず例外を投げる**)＋`AuthenticatedSession`型
-  - `redirect.server.ts`: `getAuthenticatedSessionServer()`(未認証なら`/login`へredirect)
-  - `auth.guard.ts`: `withAuth(handler)`(認証済みaccountIdを`{ accountId }`というctxでhandlerに渡す)
-- better-auth等の認証基盤本体の導入は別タスク。Template/Noteの実装時も、上記プレースホルダをそのまま利用する(新たに作り直さない)
+  - `session.server.ts`: `getSessionServer()`(`auth.api.getSession({ headers: await headers() })`。実装済み)＋`AuthenticatedSession`型(better-authの`Session`型。`features/auth/types/better-auth.d.ts`でaccountを拡張)
+  - `redirect.server.ts`: `getAuthenticatedSessionServer()`(未認証なら`/login`へredirect。戻り値はaccountを保証する`GuardedSession`型)
+  - `auth.guard.ts`: `withAuth(handler)`(認証済みaccountIdを`{ accountId }`というctxでhandlerに渡す)。上記2点の変更に伴うコード変更は不要だった
+- better-auth本体の設定は`features/auth/lib/better-auth.ts`(サーバー)/`better-auth-client.ts`(クライアント)。詳細は`frontend/docs/08_authentication.md`および`/Users/ikd/.claude/plans/snappy-hatching-steele.md`参照
 - Owner判定(本人のみ更新・削除可能等)が必要な操作は、`withAuth`が渡す`accountId`を使って判定する
+- **残タスク**: ログアウト実装(header実装→ログアウト機能実装→shared UI(avatar/dropdown-menu)導入→動作確認の順で別セッション)、および`app/(authenticated)`等のルートグループによる認証済み/未認証ルート分離(現状`/notes`等は未ガード)
+
+#### 不具合1: lastLoginAtが初回ログイン後二度と更新されない
+
+`frontend/docs/08_authentication.md`に記載の`customSession`実装(emailでキャッシュを引き、ヒットしたら即returnしヒットしなければ`createOrGetAccountCommand`を呼ぶ)は、**一度アカウントが作成されると、以降どのログインでも必ずキャッシュ(または直接のDB読み取り)がヒットするため、`createOrGetAccountCommand`(lastLoginAt更新処理)が二度と呼ばれない**という欠陥があった。`customSession`は`getSession()`が呼ばれるたびに(＝実際のログインの有無に関わらず)毎回実行される仕様のため、「キャッシュの有無」を「本当に新しいログインが起きたか」の判定に使えない。
+
+検討した代替案とその欠点:
+
+- セッション単位(`session.token`)でキャッシュ・判定する案 → セッション自体は数日〜数週間有効なため、その間ポーリングのたびに(実際は再ログインしていなくても)更新され続けてしまう
+- account側のタイムスタンプを条件に加える案 → 結局TTL的な発想に戻り、同じ問題(頻繁な更新 or 検知漏れ)が残る
+
+**採用した修正**: better-authの`hooks.after`(`createAuthMiddleware`)を使う。`setSessionCookie()`(サインイン系エンドポイント共通、OAuthコールバックも含む)はセッション確立のたびに必ず`ctx.context.setNewSession(session)`を呼ぶため、`hooks.after`内で`ctx.context.newSession`の有無を見れば「たった今新しいセッションが作られたか(＝実際にログインしたか)」を確実に判定できる(better-authソースで確認済み)。`customSession`は読み取り専用(emailキャッシュでaccountを取得するだけ)に戻し、書き込み(`createOrGetAccountCommand`)は`hooks.after`に一本化した。
+
+#### 不具合2: 2回目以降のログインでDB書き込みが500エラーになる(email UNIQUE制約違反)
+
+不具合1の修正後、実機で複数回ログインを試したところ、2回目以降のログインで`accounts_email_unique`制約違反のエラーが発生した。原因調査の結果、**database未設定(stateless)のBetter Auth構成では、`user.id`(≒`providerAccountId`として渡していた値)がログインのたびに毎回別の値になる**ことが判明した(実機のログで、同一Googleアカウントなのに`provider_account_id`が毎回異なることを確認)。
+
+これはBetter Auth側の既知の挙動で、GitHub上でも関連issue/PRが見つかった:
+
+- [Issue #6447](https://github.com/better-auth/better-auth/issues/6447): stateless構成で`generateId: false`を使い、OAuthプロバイダーの安定IDをそのまま使おうとした報告(関連バグはPR #6452で修正済み)
+- [PR #9979](https://github.com/better-auth/better-auth/pull/9979)(2026-06-11マージ): 「stateless構成(database/secondaryStorageなし)ではuser idが安定しない」ことを前提にした回避策(id不安定性自体の解消ではない)
+
+対応として以下を検討・実機検証した:
+
+1. `advanced.database.generateId: false` → 公式リファレンスでは「databaseがIDを生成する」という説明のみで、stateless時の挙動は未文書化。Better Auth自体がstateless構成のID安定性を「発展途上の課題」として扱っている(PR #9979の存在自体がそれを示す)ため、内部実装への依存度が高く不採用と判断
+2. `socialProviders.google.mapProfileToUser`でGoogleの`sub`(OIDC仕様上安定)を独自フィールド(`googleSub`)として捕まえ、`user.additionalFields`で宣言する案 → 実装し実機で検証したところ、`additionalFields`のキー自体は`newSession.user`に現れるが、`mapProfileToUser`が返した値は`undefined`になり、stateless構成では反映されないことを確認(おそらくDB構成なら`internalAdapter.createUser()`がDBへの書き込み・読み直しを経て値を保持するが、statelessではその永続化経路自体が存在しないため)
+
+**採用した修正**: Better Authの`user.id`の安定性に依存しない設計に変更。`frontend/src/external/service/account/account-service.ts`の`AccountService.createOrGetAccount`で、既存アカウントの検索を`findByProviderAccount(provider, providerAccountId)`から`findByEmail(email)`へ変更した。`email`はCLAUDE.mdの既存方針(登録時に固定、ログイン時に同期しない)でも安定した値として扱われており、Better Auth側の内部実装(将来のバージョンアップも含む)に依存しない。
+
+**残った影響**:
+
+- `accounts.provider_account_id`列(UNIQUE制約あり)は、初回登録時にBetter Authが生成した使い捨ての値が固定されたまま残る。以降の検索には使われないため実害はないが、列としての意味は薄れている
+- `AccountRepository.findByProviderAccount`(`domain/account/interface.ts`)は、この変更により呼び出し元がなくなり未使用になった。ドメインportとしては汎用的に有用な可能性もあるため、今回は削除せず残す判断とした(削除するかは別途判断)
+- **既知の未修正の問題(新規)**: `AccountService.createOrGetAccount`は`findByEmail`(SELECT)の後に`newCreate`(INSERT)または`save`(UPDATE)を呼ぶ、DBレベルでアトミックではない実装(`.onConflictDoUpdate()`のようなUPSERTではない)。同一メールアドレスに対する**初回登録リクエストが同時に2つ以上来た場合**、両方が`findByEmail`で「見つからない」と判定してしまい、片方の`newCreate`(INSERT)が`email`のUNIQUE制約違反で失敗する競合状態(race condition)が起こり得る。既存アカウントへのログイン(UPDATE)は同時に来ても問題ない(最後の書き込みが勝つだけ)。発生条件が「同一ユーザーの初回登録の連打・多重タブ」に限られ、MVP時点では対応せず許容することをユーザーと合意した(2026-08-21)。対応する場合は、`newCreate`のUNIQUE制約違反(`23505`)をcatchして`findByEmail`で再取得しUPDATEにフォールバックする、などの実装が考えられる。Account実装時からの既存の「既知の未修正の問題」(`newCreate`のINSERT順序、2回書き込みのリスク)とは別の論点
 
 ### 依存関係
 
@@ -229,7 +263,7 @@ Account→Template→Noteの順で確認。構造(CQRS+DALパターン、`input:
 
 - **`template.query.server.ts`の古いコメントを修正**: `getTemplateByIdQuery`に「account.query.server.tsには同様の検証がなく非対称...別タスクで揃える」とあったが、`account.query.server.ts`は既に`accountIdSchema`で同様に検証しており解消済みだった。実態に合わせて修正した
 
-参考情報(対応不要と判断): `frontend/docs/08_authentication.md`の「ファイル構成」`account.query.server.ts # getAccountByEmailQuery`という記載に対し、実際の`account.query.server.ts`には`getAccountByEmailQuery`が存在しない(`getAccountByIdQuery`のみ)。ただしこれは08_authentication.mdが記述するbetter-auth本体の導入自体が`docs/plans/external_implementation.md`の「認証(プレースホルダ)」節に「別タスク」と明記された未着手事項であり、今回のexternal層整理(既存コードの一貫性確認)の対象外と判断した。
+解消済み: `frontend/docs/08_authentication.md`の「ファイル構成」`account.query.server.ts # getAccountByEmailQuery`という記載に対し、当時(external層整理セッション時点)は実際の`account.query.server.ts`に`getAccountByEmailQuery`が存在しなかった(`getAccountByIdQuery`のみ)。その後のGoogleログイン+better-auth実装セッション(2026-08-20)で、`domain/account/interface.ts`に`findByEmail`、`repository/account/account-repository.ts`に実装、`service/account/account-service.ts`に`getAccountByEmail`、`handler/account/account.query.server.ts`に`getAccountByEmailQuery`(`accountEmailSchema`によるDTO境界検証込み)をそれぞれ`findById`/`getAccountById`/`getAccountByIdQuery`と同じパターンで追加し、08_authentication.mdの記載通りに解消した(`features/auth/lib/better-auth.ts`のcustomSessionキャッシュから呼ばれる)。
 
 `npx tsc --noEmit`・`npx biome check`で確認済み。
 

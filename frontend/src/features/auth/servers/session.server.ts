@@ -1,25 +1,18 @@
 import "server-only";
+import type { Session } from "better-auth";
+import { headers } from "next/headers";
+import { auth } from "../lib/better-auth";
 
 /**
- * 認証済みセッション。
+ * 実装方針: frontend/docs/08_authentication.md「セッション取得」
  *
- * 未実装のプレースホルダ。better-auth導入後、実際のセッション型
- * （better-authの`Session`）に差し替える。
+ * better-authの`Session`型(features/auth/types/better-auth.d.tsでaccountを拡張済み)。
  */
-export interface AuthenticatedSession {
-  account: {
-    id: string;
-  };
-}
+export type AuthenticatedSession = Session;
 
 /**
  * 現在のセッションを取得する。
- *
- * 未実装のプレースホルダ。認証基盤（better-auth等）が未導入のため、
- * セッションを取得する処理はまだ存在しない。
- * 導入後、`auth.api.getSession({ headers: await headers() })`相当の
- * 実装に差し替える。
  */
 export async function getSessionServer(): Promise<AuthenticatedSession | null> {
-  throw new Error("getSessionServer is not implemented yet");
+  return await auth.api.getSession({ headers: await headers() });
 }

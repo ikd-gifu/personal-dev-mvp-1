@@ -1,19 +1,16 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { signIn } from "../../../lib/better-auth-client";
 
 /**
- * ログイン処理のスタブ。
- *
- * 本来は signIn.social({ provider: "google", callbackURL: "/notes" })
- * (Better Auth) を呼び出す想定だが、Better Auth未導入のため
- * クライアント側遷移のみ行う。導入後はこの関数の中身を置き換える。
+ * 実装方針: frontend/docs/08_authentication.md「1. ログインボタンクリック」
  */
 export function useLoginClient() {
-  const router = useRouter();
-
-  const handleLogin = () => {
-    router.push("/notes");
+  const handleLogin = async () => {
+    await signIn.social({
+      provider: "google",
+      callbackURL: "/notes",
+    });
   };
 
   return { handleLogin };

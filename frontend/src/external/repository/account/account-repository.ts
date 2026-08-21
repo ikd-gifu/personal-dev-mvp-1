@@ -20,6 +20,14 @@ export class DrizzleAccountRepository implements AccountRepository {
     return row ? toDomain(row) : null;
   }
 
+  async findByEmail(email: string): Promise<Account | null> {
+    const row = await db.query.accounts.findFirst({
+      where: eq(accounts.email, email),
+    });
+
+    return row ? toDomain(row) : null;
+  }
+
   async findByProviderAccount(
     provider: string,
     providerAccountId: string,

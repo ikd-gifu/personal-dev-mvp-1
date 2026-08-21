@@ -1,6 +1,7 @@
 import "server-only";
 import type { AccountResponse } from "../../dto/account/account-dto";
 import {
+  accountEmailSchema,
   accountIdSchema,
   toAccountResponse,
 } from "../../dto/account/account-dto";
@@ -22,5 +23,19 @@ export async function getAccountByIdQuery(
 ): Promise<AccountResponse | null> {
   const validId = accountIdSchema.parse(id);
   const account = await accountService.getAccountById(validId);
+  return account ? toAccountResponse(account) : null;
+}
+
+/**
+ * URL定義: なし(内部処理)。frontend/docs/08_authentication.md「customSession プラグイン」の
+ * アカウントキャッシュ(unstable_cache)から呼ばれる、features/auth/lib/better-auth.ts専用のクエリ。
+ *
+ * ビジネスルール: 存在しない場合はnullをかえす(getAccountByIdQueryと同様)
+ */
+export async function getAccountByEmailQuery(
+  email: string,
+): Promise<AccountResponse | null> {
+  const validEmail = accountEmailSchema.parse(email);
+  const account = await accountService.getAccountByEmail(validEmail);
   return account ? toAccountResponse(account) : null;
 }

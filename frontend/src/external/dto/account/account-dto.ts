@@ -19,6 +19,12 @@ import type { Account } from "../../domain/account/account";
  */
 export const accountIdSchema = z.uuid();
 
+/**
+ * customSession(features/auth/lib/better-auth.ts)でのアカウントキャッシュ参照キー用。
+ * accountIdSchemaと同じ理由(境界での早期検証)。
+ */
+export const accountEmailSchema = z.email();
+
 export const createOrGetAccountRequestSchema = z.object({
   email: z.email(),
   name: z.string(),

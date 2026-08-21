@@ -20,6 +20,13 @@ export class AccountService {
    *
    * 新規作成の場合も、OAuthログインを契機とした登録であるため、
    * AccountResponse.lastLoginAt（非nullable）を満たすようupdateOnLoginを適用する。
+   *
+   * 既存アカウントの検索キーはemail（providerAccountIdではない）。
+   * 経緯: docs/plans/external_implementation.md「認証」節を参照。
+   * database未設定のBetter Auth stateless構成では、providerAccountIdの元となる
+   * user.idがログインのたびに変わり（Better Auth GitHub Issue #6447/PR #9979で
+   * 既知の挙動、実機でも確認済み）、provider+providerAccountIdでの検索キーとして
+   * 使えないため。
    */
   async createOrGetAccount(profile: {
     email: string;
@@ -31,10 +38,7 @@ export class AccountService {
     const { firstName, lastName } = Account.splitProviderName(profile.name);
     const now = new Date();
 
-    const existing = await this.accountRepository.findByProviderAccount(
-      profile.provider,
-      profile.providerAccountId,
-    );
+    const existing = await this.accountRepository.findByEmail(profile.email);
 
     if (existing) {
       const updated = existing.updateOnLogin(
@@ -73,6 +77,15 @@ export class AccountService {
    */
   async getAccountById(id: string): Promise<Account | null> {
     return this.accountRepository.findById(id);
+  }
+
+  /**
+   * 用語定義: frontend/docs/08_authentication.md「customSession プラグイン」
+   * customSessionのキャッシュ(unstable_cache)参照用。
+   * getAccountByIdと同様、セッションからのメール解決は呼び出し側の責務。
+   */
+  async getAccountByEmail(email: string): Promise<Account | null> {
+    return this.accountRepository.findByEmail(email);
   }
 }
 
