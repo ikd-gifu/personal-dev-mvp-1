@@ -2,7 +2,7 @@
 
 このファイルは作業単位の一時的な引き継ぎ資料であり、`docs/global_design/`の設計書と同格には扱わない。作業完了後は削除してよい。
 
-**ステータス: 未着手。MVP実装を優先するため、2026-08-21時点では見送りと合意済み。着手する場合はこのファイルを計画として使う。候補は案A・案B・案Cの3つがあり、案C(`ctx.context.internalAdapter.findAccounts()`で同一リクエスト内から読む。ユーザーが`node_modules`のソースを直接調査して発見)が最有力。着手時は案Cから検証すること。**
+**ステータス: 未着手。MVP実装を優先するため、2026-08-21時点では見送りと合意済み。着手する場合はこのファイルを計画として使う。候補は案A・案B・案Cの3つがあり、案C(`ctx.context.internalAdapter.findAccounts()`で同一リクエスト内から読む。ユーザーが`node_modules`のソースを直接調査して発見)が最有力。2026-08-22、`features/auth/lib/better-auth.ts`にデバッグログを仕込んだ実機検証により、案Cが実際に動作すること(Googleのsubを正しく取得できること)を確認済み。ただし`internalAdapter`はBetter Auth内部APIであり長期的な安定性は保証されないため、着手時は本採用前に下記「2026-08-22追加調査」を確認すること。**
 
 ## 背景(経緯の要約)
 
@@ -125,7 +125,7 @@ socialProviders: {
 
 **Google限定の仕組みではない**: `internalAdapter.createAccount()`/`findAccounts()`は、OAuthコールバック処理(`callback.ts`、ルート`/callback/:id`)自体がGoogle専用ではなく全ソーシャルプロバイダー共通の処理であるため、`providerId`(例: `"google"`, `"github"`)と`accountId`(そのプロバイダー発行の安定したID)をaccountレコードに保存する仕組み自体はプロバイダー非依存。一方、案A(`mapProfileToUser`)は`socialProviders.<provider>.mapProfileToUser`のようにプロバイダーごとの個別設定であり、プロバイダーを追加するたびに同じロジックを複製する必要がある。この点でも案Cの方が設計として優れている。
 
-以下のコード例は、どのプロバイダーで実際にログインしたかを`ctx`から動的に取得し、Google専用の記述(`providerId === "google"`のような固定値)を含まない形にしてある(`ctx.params?.id`部分の正確なプロパティ名は未検証。「案Cの未検証・着手時に確認すべきこと」参照)。
+**2026-08-21再検討で簡略化**: 当初案は「今回使われたプロバイダーを`ctx.params?.id`(未検証)で特定してから、そのproviderIdに一致するaccountレコードを探す」という2段階の設計だったが、`internalAdapter.findAccounts()`が返す各accountレコード自体に**`providerId`と`accountId`の両方が最初から含まれている**ため、`ctx.params?.id`は不要と判明した。stateless構成では`user`自体がそのリクエストで新規に作られたばかりで過去の紐付けを持たないため、`findAccounts(newSession.user.id)`が返すのは基本的に「今回のログインで使ったプロバイダーの1件」のみのはずである。これにより未検証事項が1つ減った(下記コード例は更新済み)。
 
 ```ts
 // features/auth/lib/better-auth.ts（イメージ。Google専用ではなく、
@@ -135,20 +135,17 @@ hooks: {
     const newSession = ctx.context.newSession;
     if (!newSession) return; // セッションが実際に発行された時だけ実行 = ログイン完全成功のみ
 
-    // ctx.path は "/callback/:id" 形式。:id が今回実際に使われたプロバイダー
-    // (google, github 等)。socialProvidersにどのプロバイダーを追加しても
-    // この部分の変更は不要
-    const providerId = ctx.params?.id;
-    if (!providerId) return;
-
+    // stateless構成ではuser自体がこのリクエストで新規に作られたばかりで
+    // 過去の紐付けを持たないため、返るのは基本的に今回ログインした1件のみ。
+    // providerId/accountIdは各accountレコードに最初から含まれている
     const accounts = await ctx.context.internalAdapter.findAccounts(newSession.user.id);
-    const linkedAccount = accounts.find((a) => a.providerId === providerId);
+    const linkedAccount = accounts[0];
     if (!linkedAccount) return;
 
     await createOrGetAccountCommand({
       email: newSession.user.email,
       name: newSession.user.name || newSession.user.email,
-      provider: providerId,
+      provider: linkedAccount.providerId,
       providerAccountId: linkedAccount.accountId, // ← プロバイダーが発行する安定したID(Googleならsub)
       thumbnail: newSession.user.image || undefined,
     });
@@ -168,11 +165,42 @@ hooks: {
 
 - `ctx.context.internalAdapter`はBetter Authの**内部API(非公開・非ドキュメント化)**。将来のバージョンアップで変更・削除される可能性がある。ただしBetter Auth公式プラグイン自身が同じパターンで使っているため、少なくとも現バージョンでは安定して存在すると考えられる
 - `hooks.after`の`ctx`から`ctx.context.internalAdapter`に実際にアクセスできるか(型定義上・実行時とも)は未検証。`createAuthMiddleware`のコールバックに渡される`ctx`の型を確認する必要がある
-- `findAccounts`の戻り値の形(`providerId`/`accountId`などのフィールド名)も、上記コード例はユーザーの調査に基づく想定であり、実装時に実際の型・戻り値を確認すること
-- `ctx.params?.id`(今回のコールバックで使われたプロバイダーIDの取得方法)も未検証。`createAuthMiddleware`のコールバックに渡される`ctx`が実際に`params`を持つか、プロパティ名が正しいかを実装時に確認する
+- `findAccounts`の戻り値の形(`providerId`/`accountId`などのフィールド名)も、上記コード例はユーザーの調査に基づく想定であり、実装時に実際の型・戻り値を確認すること(2026-08-21再検討で、この戻り値自体に`providerId`が含まれることを利用する形に簡略化し、`ctx.params?.id`は不要と判明。前述の懸念点から削除)
+- 独自の`accounts`テーブルとの衝突: 衝突しない。`ctx.context.internalAdapter.findAccounts()`はBetter Auth自身の内部"account"概念(stateless構成ではメモリ上)を読むだけで、私たちの`accounts`テーブル(Postgres)への書き込みは今まで通り明示的に`createOrGetAccountCommand`を呼ぶ必要がある(値の取得元が変わるだけ)。詳細は上記「Account」という言葉が指す2つの別概念に注意(案Bの節)を参照。読み取りだけの操作なので、副作用として独自テーブルに影響することはない
 
 **次に着手する際は、案A・案Bより先にこちら(案C)を検証すべき。**
+
+## 2026-08-22追加調査: 案Cの実機検証結果とinternalAdapterの安定性
+
+### 実機検証(`hooks.after`にデバッグログを追加して確認)
+
+`features/auth/lib/better-auth.ts`の`hooks.after`に一時的なログ出力を追加し、`ctx.context.internalAdapter.findAccountByUserId(newSession.user.id)`(案Cと同じ`internalAdapter`を使う近縁のメソッド)で取得した`accountId`と、これまで`providerAccountId`として渡していた`newSession.user.id`を比較した。
+
+- 同一プロセス内で複数回ログインしても、`internalAdapter`から取得した`accountId`は常に同じ値だった(Googleの`sub`として妥当)
+- 一方`newSession.user.id`は、同一プロセス内では安定していたが、開発サーバーのプロセスを再起動(Ctrl+C→`pnpm dev`)すると別の値に変わった
+- この結果は「案Cの背景」に記載した仮説(statelessの`internalAdapter`の実体はインメモリの`memoryAdapter`で、プロセスをまたぐと消える)と一致する。`user.id`が変わる根本原因は、プロセス再起動により`memoryDB`が空になり、`findUserByEmail`がヒットせず`createUser`が新しい`id`を生成するため(`db/internal-adapter.mjs`の`createUser`)
+
+これにより、**案Cが取得しようとしている値(`internalAdapter`経由の`accountId`)がGoogleの安定した`sub`と一致すること**は実機で確認できた。
+
+### internalAdapterの安定性についてのWeb調査
+
+ユーザーからの指摘を受け、`ctx.context.internalAdapter`(および`findAccountByUserId`/`findAccounts`)の将来性についてWeb上のBetter Auth公式リポジトリ・ドキュメントを調査した。
+
+- **GitHub Issue #9496「`internalAdapter` API cleanup」**: `internalAdapter`はBetter Auth公式ドキュメント(プラグイン開発ガイド)にも登場する、プラグイン作者向けの内部DB呼び出し用APIである。このIssueでは`findAccounts`と`findAccountByUserId`が「どちらも`userId`でfindManyする重複メソッド」として明記されており、命名の不整合や重複が公式に認識されている。ただし**非推奨(deprecated)を宣言する記述はなく**、具体的な統廃合の実施計画も本文にはない。ステータスは**Closed as not planned**(2026-08-22時点で再確認。検索キャッシュ上は一時的に「Open」と表示されたが、GitHubページの再取得により訂正)
+- **GitHub Issue #8165「Unable to get account data from a plugin middleware/endpoint in stateless mode」**: stateless構成で`context.internalAdapter.findAccountByUserId`がリクエストによって`null`を返すなど不安定に動作する、という報告。PR #8181で対応されClose済み。この対応の結果として、Cookieからアカウント情報を安全に取得する`getAccountCookie`が公式に追加された(下記参照)
+- **`google.ts`(Better Auth公式ソース、`packages/core/src/social-providers/google.ts`)**: `accountSubject: ({ profile }) => profile.sub`、`accountIssuer: "https://accounts.google.com"`と定義されていることを確認。Googleプロバイダーの`accountId`はOIDCの`sub`クレーム由来であることがソースレベルで裏付けられた
+- **`better-auth/cookies`のpublic exports(このプロジェクトが実際にインストール済みのv1.7.1で確認)**: `node_modules`内の`dist/cookies/index.mjs`・`package.json`の`exports`マップを直接確認したところ、`getAccountCookie`/`setAccountCookie`は`better-auth/cookies`のサブパスから公式にexportされている(内部専用ファイルの奥に隠れているわけではない)。公式ドキュメント(`docs/concepts/oauth`)にも`authClient.accountInfo({ query: { useAccountCookie: true } })`という、DBなし構成でCookieからアカウント情報を取得する公開APIの使用例が掲載されている
+
+### 結論(このプロジェクトでの位置づけ)
+
+- `ctx.context.internalAdapter.findAccountByUserId`/`findAccounts`は、**現時点(Better Auth 1.7.1)で非推奨ではなく、Better Auth公式プラグインも同じアクセスパターンを使っている**。今すぐ動かなくなるリスクは低い
+- ただし公式に「internal」と位置付けられたAPIであり、Issue #9496で重複が認識済みという事実は、**将来のメジャーバージョンで統廃合されうる**ことを示唆する。「5年・10年単位で保守する前提の恒久的な実装」として設計するべきAPIではない
+- 一方で、`getAccountCookie`/`setAccountCookie`/`accountInfo({ useAccountCookie: true })`という、**Cookieベースの公開APIによる代替経路が現行バージョンで実際に存在する**ことも確認できた。これは案Bで懸念していた「Cookie読み書きAPIの正確な使い方が未確認」という点への手がかりになる
+- 案Bで未解決だった「`hooks.after`(OAuthコールバックと同一リクエスト)の中で、直前に書き込んだはずの`account_data`Cookieを`getAccountCookie(ctx)`で読み返せるか」は、今回の調査でも**未検証のまま**。`setAccountCookie`は`ctx.setCookie`でレスポンス側にセットするだけで、同一リクエスト内の`ctx.getCookie`がその値を読み返せるかは別問題であり、これは実装時に別途確認が必要
+- 以上より、**MVPを優先し短期的に案Cを採用すること自体は妥当**だが、`internalAdapter`への依存は呼び出し箇所を1か所に隔離すること、および長期的には「OAuthコールバック完了後の別リクエストで`auth.api.accountInfo({ query: { useAccountCookie: true } })`という公開APIから`accountId`を取得し、独自の`accounts`テーブルへ反映する」という設計への移行を将来の検討候補として残す
 
 ## 意思決定の記録
 
 2026-08-21、ユーザーと合意: MVP実装を優先するため今回は着手せず、このファイルを計画として残し、後日着手する。同日、追加調査により案B(account_data Cookie機構の利用)を発見し、案Aより有力な候補として記録した。さらに同日、ユーザーが`node_modules`のBetter Authソースを直接調査し、案C(`ctx.context.internalAdapter.findAccounts()`で同一リクエスト内から読む)を発見。Cookieを介さずリクエストをまたぐ不確実性がないため、案Bより有力な最有力候補として記録した。
+
+2026-08-22、`hooks.after`への一時的なデバッグログ追加により、案Cが取得する値(`internalAdapter`経由の`accountId`)がGoogleの`sub`と一致し、プロセスを再起動しても不変であることを実機確認した。また、これまで`providerAccountId`として使っていた`newSession.user.id`が、プロセス再起動によって変化することも実機で再現し、「案Cの背景」の仮説を裏付けた。あわせてユーザーの指摘を受け、`internalAdapter`の将来性についてWeb調査を実施(GitHub Issue #9496・#8165、Better Auth公式ソース・ドキュメントを確認)。結論は「2026-08-22追加調査」節に記載の通り、現時点では非推奨ではないが恒久採用向けではなく、着手する場合は依存箇所を1か所に隔離し、長期的には公開APIの`accountInfo({ useAccountCookie: true })`への移行を検討する、という方針を追記した。この調査時点でもMVP実装優先の方針は変えず、引き続き未着手のまま計画として残す。
