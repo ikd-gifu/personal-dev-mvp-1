@@ -182,6 +182,28 @@ export async function getSessionServer(): Promise<Session | null> {
 }
 ```
 
+### 6. ログアウト
+
+Stateless セッションのため、ログアウトはCookie削除のみ（DBアクセス不要）。`better-auth/react`の`signOut`はコールバックを`fetchOptions.onSuccess`で受け取る仕様のため、`callbackURL`ではなく`onSuccess`内で遷移する（`docs/global_design/04_screen_design.md`「ログアウト後、`/login`へリダイレクトする」に準拠）。
+
+```ts
+// shared/components/layout/Header/useHeader.ts
+const router = useRouter();
+const { data } = useSession();
+
+const handleLogout = async () => {
+  await signOut({
+    fetchOptions: {
+      onSuccess: () => router.push("/login"),
+    },
+  });
+};
+
+return { account: data?.account, handleLogout };
+```
+
+`shared/components/layout/Header`はContainer/Presenter + カスタムフック（`useHeader`）で構成する（`features/auth/components/client/LoginPageClient`と同型のパターン）。`HeaderPresenter`は`account`（`useSession()`が返す`AccountResponse`。`customSession`経由）の`thumbnail`・`fullName`・`email`を使って、`shadcn/ui`の`Avatar` + `DropdownMenu`（`shared/components/ui/avatar.tsx` / `dropdown-menu.tsx`）でユーザーメニューを表示する（`docs/global_design/04_screen_design.md`「右上ユーザーメニュー」に対応。ただし`My Notes`ショートカットは`/my-notes`未実装のため含めない）。認証済み/未認証ルートの分離（ヘッダーの出し分け含む）はステップ8で別途対応する。
+
 ## キャッシュ戦略
 
 サーバーサイド（unstable_cache）
@@ -349,6 +371,17 @@ features/auth/
     │   └── LoginPageClient/  # ログインUI
     └── server/
         └── LoginPageTemplate/
+
+shared/components/layout/
+└── Header/
+    ├── index.ts               # HeaderContainerをexport
+    ├── HeaderContainer.tsx     # useHeaderを呼ぶだけ
+    ├── HeaderPresenter.tsx     # ロゴ表示 + Avatar/DropdownMenuによるユーザーメニュー
+    └── useHeader.ts            # useSession（account取得）とログアウト処理
+
+shared/components/ui/
+├── avatar.tsx                 # shadcn/ui（CLIで追加）
+└── dropdown-menu.tsx          # shadcn/ui（CLIで追加）
 
 external/handler/account/
 ├── account.command.server.ts # createOrGetAccountCommand

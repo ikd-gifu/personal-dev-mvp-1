@@ -1,3 +1,10 @@
+import { HeaderContainer } from "@/shared/components/layout/Header";
+
 export default function NotesPage() {
-  return <div>仮ページ</div>;
+  return (
+    <>
+      <HeaderContainer />
+      <div>仮ページ</div>
+    </>
+  );
 }
