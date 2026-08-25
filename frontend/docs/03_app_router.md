@@ -77,6 +77,21 @@ export default async function AuthenticatedLayout(props: LayoutProps<'/'>) {
 }
 ```
 
+`(guest)`側も同じ構造で揃える（Wrapperの中身はリダイレクト方向が逆。詳細は`08_authentication.md`「認証ガード」参照）。
+
+```tsx
+// app/(guest)/layout.tsx
+import { GuestLayoutWrapper } from '@/shared/components/layout/server/GuestLayoutWrapper'
+
+export default async function GuestLayout(props: LayoutProps<'/'>) {
+  return (
+    <GuestLayoutWrapper>
+      {props.children}
+    </GuestLayoutWrapper>
+  )
+}
+```
+
 ## エラーハンドリング
 
 ```tsx

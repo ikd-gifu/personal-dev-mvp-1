@@ -202,7 +202,7 @@ const handleLogout = async () => {
 return { account: data?.account, handleLogout };
 ```
 
-`shared/components/layout/Header`はContainer/Presenter + カスタムフック（`useHeader`）で構成する（`features/auth/components/client/LoginPageClient`と同型のパターン）。`HeaderPresenter`は`account`（`useSession()`が返す`AccountResponse`。`customSession`経由）の`thumbnail`・`fullName`・`email`を使って、`shadcn/ui`の`Avatar` + `DropdownMenu`（`shared/components/ui/avatar.tsx` / `dropdown-menu.tsx`）でユーザーメニューを表示する（`docs/global_design/04_screen_design.md`「右上ユーザーメニュー」に対応。ただし`My Notes`ショートカットは`/my-notes`未実装のため含めない）。認証済み/未認証ルートの分離（ヘッダーの出し分け含む）はステップ8で別途対応する。
+`shared/components/layout/client/Header`はContainer/Presenter + カスタムフック（`useHeader`）で構成する（`features/auth/components/client/LoginPageClient`と同型のパターン）。`HeaderPresenter`は`account`（`useSession()`が返す`AccountResponse`。`customSession`経由）の`thumbnail`・`fullName`・`email`を使って、`shadcn/ui`の`Avatar` + `DropdownMenu`（`shared/components/ui/avatar.tsx` / `dropdown-menu.tsx`）でユーザーメニューを表示する（`docs/global_design/04_screen_design.md`「右上ユーザーメニュー」に対応。ただし`My Notes`ショートカットは`/my-notes`未実装のため含めない）。認証済み/未認証ルートの分離（`app/(authenticated)`/`app/(guest)`ルートグループ。ヘッダーの出し分けは`(authenticated)`配下のページのみがHeaderをimportする形で実現）はステップ8で完了した。詳細は下記「認証ガード」節を参照。
 
 ## キャッシュ戦略
 
@@ -260,6 +260,8 @@ declare module "better-auth" {
 
 ```ts
 // features/auth/servers/redirect.server.ts
+
+// 未認証ならログイン画面へリダイレクトする。(authenticated)側のガードに使う
 export async function getAuthenticatedSessionServer(): Promise<GuardedSession> {
   const session = await getSessionServer();
   const account = session?.account;
@@ -270,18 +272,51 @@ export async function getAuthenticatedSessionServer(): Promise<GuardedSession> {
 
   return { ...session, account };
 }
+
+// 認証済みならノート一覧へリダイレクトする。(guest)側のガードに使う
+export async function redirectIfAuthenticatedServer(): Promise<void> {
+  const session = await getSessionServer();
+
+  if (session?.account) {
+    redirect("/notes");
+  }
+}
 ```
 
 （`GuardedSession`は`AuthenticatedSession & { account: NonNullable<AuthenticatedSession["account"]> }`。ガード通過後はaccountが保証されていることを型で表す）
 
-使用例（`app/(authenticated)/`ルートグループは未実装。ステップ8で導入予定。それまでは各ページが個別に呼ぶ）
+**ルートグループのlayout.tsx実装（ステップ8で完了）**
+
+認証チェックはlayout.tsxに直接書かず、`shared/components/layout/server/`配下の薄いWrapper Server Componentに委譲する（`03_app_router.md`「認証レイアウト実装」に準拠）。layout.tsx自身は「どのWrapperで包むか」だけを表現し、ロジックを持たない。
 
 ```tsx
-export default async function NotesPage() {
-  const session = await getAuthenticatedSessionServer();
-  // session.account.id が保証されている
+// shared/components/layout/server/AuthenticatedLayoutWrapper/AuthenticatedLayoutWrapper.tsx
+import { getAuthenticatedSessionServer } from "@/features/auth/servers/redirect.server";
+
+export async function AuthenticatedLayoutWrapper({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  await getAuthenticatedSessionServer();
+  return <>{children}</>;
 }
 ```
+
+```tsx
+// app/(authenticated)/layout.tsx
+import { AuthenticatedLayoutWrapper } from "@/shared/components/layout/server/AuthenticatedLayoutWrapper";
+
+export default async function AuthenticatedLayout(props: LayoutProps<"/">) {
+  return (
+    <AuthenticatedLayoutWrapper>{props.children}</AuthenticatedLayoutWrapper>
+  );
+}
+```
+
+`app/(guest)/layout.tsx`も同じ構造で、`GuestLayoutWrapper`が`redirectIfAuthenticatedServer()`を呼ぶ（未認証ユーザーには何もせず`children`を返す。認証済みユーザーが`/login`に来たら`/notes`へリダイレクトする）。
+
+これにより、各ページ（`NotesPage`など）はガードを個別に呼ぶ必要がなくなった。ページ内で`accountId`が必要な場合（Server Actionなど）は、引き続き`withAuth`（`auth.guard.ts`）や`getAuthenticatedSessionServer()`を個別に呼ぶ。
 
 ## 環境変数
 
@@ -362,7 +397,7 @@ features/auth/
 │   └── better-auth-client.ts # クライアント側設定
 ├── servers/
 │   ├── session.server.ts     # getSessionServer
-│   ├── redirect.server.ts    # getAuthenticatedSessionServer
+│   ├── redirect.server.ts    # getAuthenticatedSessionServer, redirectIfAuthenticatedServer
 │   └── auth.guard.ts         # withAuth（Server Actionからの利用）
 ├── types/
 │   └── better-auth.d.ts      # 型定義（Module Augmentation）
@@ -372,12 +407,24 @@ features/auth/
     └── server/
         └── LoginPageTemplate/
 
+app/
+├── (guest)/
+│   ├── layout.tsx             # GuestLayoutWrapperに委譲するだけ
+│   └── login/page.tsx
+└── (authenticated)/
+    ├── layout.tsx              # AuthenticatedLayoutWrapperに委譲するだけ
+    └── notes/page.tsx
+
 shared/components/layout/
-└── Header/
-    ├── index.ts               # HeaderContainerをexport
-    ├── HeaderContainer.tsx     # useHeaderを呼ぶだけ
-    ├── HeaderPresenter.tsx     # ロゴ表示 + Avatar/DropdownMenuによるユーザーメニュー
-    └── useHeader.ts            # useSession（account取得）とログアウト処理
+├── client/
+│   └── Header/                 # useSession等を使うクライアントコンポーネント
+│       ├── index.ts             # HeaderContainerをexport
+│       ├── HeaderContainer.tsx  # useHeaderを呼ぶだけ
+│       ├── HeaderPresenter.tsx  # ロゴ表示 + Avatar/DropdownMenuによるユーザーメニュー
+│       └── useHeader.ts         # useSession（account取得）とログアウト処理
+└── server/
+    ├── AuthenticatedLayoutWrapper/ # 未認証なら/loginへリダイレクト。(authenticated)配下用
+    └── GuestLayoutWrapper/         # 認証済みなら/notesへリダイレクト。(guest)配下用
 
 shared/components/ui/
 ├── avatar.tsx                 # shadcn/ui（CLIで追加）

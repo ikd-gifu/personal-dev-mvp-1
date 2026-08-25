@@ -72,7 +72,11 @@ Next.js公式ドキュメント(`node_modules/next/dist/docs/01-app/02-guides/da
   - `auth.guard.ts`: `withAuth(handler)`(認証済みaccountIdを`{ accountId }`というctxでhandlerに渡す)。上記2点の変更に伴うコード変更は不要だった
 - better-auth本体の設定は`features/auth/lib/better-auth.ts`(サーバー)/`better-auth-client.ts`(クライアント)。詳細は`frontend/docs/08_authentication.md`および`/Users/ikd/.claude/plans/snappy-hatching-steele.md`参照
 - Owner判定(本人のみ更新・削除可能等)が必要な操作は、`withAuth`が渡す`accountId`を使って判定する
-- **残タスク**: ログアウト実装(header実装→ログアウト機能実装→shared UI(avatar/dropdown-menu)導入→動作確認の順で別セッション)、および`app/(authenticated)`等のルートグループによる認証済み/未認証ルート分離(現状`/notes`等は未ガード)
+- **ステップ8完了(2026-08-25)**: ログアウト実装(header実装→ログアウト機能実装→shared UI(avatar/dropdown-menu)導入→動作確認)、および`app/(authenticated)`・`app/(guest)`ルートグループによる認証済み/未認証ルート分離が完了した。詳細は`frontend/docs/08_authentication.md`「認証ガード」節を参照。
+  - `app/login/page.tsx` → `app/(guest)/login/page.tsx`、`app/notes/page.tsx` → `app/(authenticated)/notes/page.tsx`に移動
+  - 認証チェックはlayout.tsxに直接書かず、`shared/components/layout/server/AuthenticatedLayoutWrapper`(未認証→`/login`)・`GuestLayoutWrapper`(認証済み→`/notes`)という薄いServer Componentに委譲する設計を採用(`frontend/docs/03_app_router.md`「認証レイアウト実装」に準拠。当初docの参考実装がNext.Auth時代の名残で誤っていたため、途中で訂正した)
+  - `shared/components/layout/Header/`は`shared/components/layout/client/Header/`へ移動し、`layout/server/`(Wrapper系)と`layout/client/`(Header等のクライアントコンポーネント)を明確に分離した
+  - ブラウザでの実ログイン・ログアウトによる動作確認済み(未ログインで`/notes`直打ち→`/login`、ログイン済みで`/login`直打ち→`/notes`)
 
 #### 不具合1: lastLoginAtが初回ログイン後二度と更新されない
 

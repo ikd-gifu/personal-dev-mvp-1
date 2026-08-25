@@ -1,4 +1,4 @@
-import { HeaderContainer } from "@/shared/components/layout/Header";
+import { HeaderContainer } from "@/shared/components/layout/client/Header";
 
 export default function NotesPage() {
   return (
