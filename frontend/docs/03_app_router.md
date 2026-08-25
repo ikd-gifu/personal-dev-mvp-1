@@ -66,21 +66,14 @@ export default function NotesLayout({ children }: LayoutProps<"/notes">) {
 
 ```tsx
 // app/(authenticated)/layout.tsx
-import { redirect } from 'next/navigation'
-import { headers } from 'next/headers'
-import { auth } from '@/features/auth/lib/better-auth'
 import { AuthenticatedLayoutWrapper } from '@/shared/components/layout/server/AuthenticatedLayoutWrapper'
 
-export default async function AuthenticatedPageLayout({
-  children,
-}: LayoutProps<'/'>) {
-  const session = await auth.api.getSession({ headers: await headers() })
-
-  if (!session?.account) {
-    redirect('/login')
-  }
-
-  return <AuthenticatedLayoutWrapper>{children}</AuthenticatedLayoutWrapper>
+export default async function AuthenticatedLayout(props: LayoutProps<'/'>) {
+  return (
+    <AuthenticatedLayoutWrapper>
+      {props.children}
+    </AuthenticatedLayoutWrapper>
+  )
 }
 ```
 

@@ -26,3 +26,15 @@ export async function getAuthenticatedSessionServer(): Promise<GuardedSession> {
 
   return { ...session, account };
 }
+
+/**
+ * 認証済み（account情報を含む）の場合、ノート一覧へリダイレクトする。
+ * ゲスト向けページ（ログイン画面など）へのアクセス時に使用する。
+ */
+export async function redirectIfAuthenticatedServer(): Promise<void> {
+  const session = await getSessionServer();
+
+  if (session?.account) {
+    redirect("/notes");
+  }
+}
