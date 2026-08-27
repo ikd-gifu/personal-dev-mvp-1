@@ -1,14 +1,33 @@
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import * as schema from "./schema";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is not set");
 }
 
-const pool = new Pool({
+/**
+ * `enableChannelBinding`はpg本体(lib/client.js)には実装済みだが、
+ * `@types/pg`の型定義が追従していないため、intersection型で明示的に拡張する。
+ */
+const poolConfig: PoolConfig & { enableChannelBinding: boolean } = {
   connectionString: process.env.DATABASE_URL,
-});
+  enableChannelBinding: true,
+};
+
+/**
+ * developmentのみ`pool`をglobalThisにキャッシュする理由: `next dev`のHMRでこのモジュールが
+ * 再評価されるたびに`new Pool()`が呼ばれ、古い接続を閉じないまま新しい接続を張り続けて
+ * リークするのを防ぐため。Cloud Run（`next start`）はモジュールが起動時に一度しか評価されず
+ * 無関係なので、production側に不要なグローバル可変状態を持ち込まないようdevelopmentに限定する。
+ */
+const globalForDb = globalThis as unknown as { pool?: Pool };
+
+const pool = globalForDb.pool ?? new Pool(poolConfig);
+
+if (process.env.NODE_ENV === "development") {
+  globalForDb.pool = pool;
+}
 
 export const db = drizzle(pool, { schema });
 
