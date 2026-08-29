@@ -1,0 +1,33 @@
+# dependencies
+node_modules
+
+# next.js build output
+.next
+out
+
+# env files (secrets)
+.env
+.env.*
+
+# git
+.git
+.gitignore
+
+# docs / meta
+docs
+README.md
+AGENTS.md
+CLAUDE.md
+
+# db migrations(ランタイムでは不要。local_db_setup.md参照)
+drizzle
+
+# misc
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+coverage
