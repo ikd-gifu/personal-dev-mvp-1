@@ -36,3 +36,47 @@
 - **trimを呼び出し側(`create`/`updateOnLogin`)で行う理由**: コンストラクタのパラメータプロパティ省略記法(`public readonly firstName: string`)は、代入前に値を変換できない制約がある。そのため、保存前の正規化(trim)は呼び出し側で行い、コンストラクタ内の不変条件チェックは(呼び出し側のtrim漏れに備えて)`.trim()`した上で判定する。
 - **`updateOnLogin`が`email`を更新しない理由**: Googleアカウントのメールアドレスは理論上変更され得るが、`email`にはDBの`UNIQUE`制約があり、ログイン毎に同期すると衝突のリスクがある。そのためemailは登録時(`newCreate`)に固定し、ログイン時に同期するプロフィール情報は`firstName`/`lastName`/`thumbnail`のみとする。
 - **`provider` + `providerAccountId`の一意性をドメインで検証しない理由**: 単一の集約(Accountインスタンス)からは他アカウントの存在を確認できないため、検証はDBの`UNIQUE`制約に委ねる。
+
+## Secrets Handling(重要・必ず遵守)
+
+このマシン上のプロジェクトでは `.env*` ファイルや `secrets/` 配下に、DB接続文字列・APIキー・認証シークレットなどの機密情報が含まれる可能性があります。以下を厳守してください。
+
+- `.env*` ファイルや `secrets/` 配下のファイルの中身を読む・表示する・catする・grepする・echoする・printenvするなど、いかなる方法でも値を会話やターミナル出力に出さない。
+- 環境変数が設定されているかどうかを確認したい場合は、値ではなくキー名の有無だけを確認する。
+  - 例: `grep -oE '^[A-Z_]+' .env.local`(値は表示しない)
+  - 例: `node -e "console.log(!!process.env.DATABASE_URL)"`(真偽値のみ)
+- 接続文字列・パスワード・APIキー・トークンなど機密性の高い値は、コード・コミットメッセージ・会話のどこにも出力しない。
+- 万一、上記のような値を誤って出力してしまった場合は、直ちにその旨をユーザーに報告する。ユーザーは該当サービス側でのキー/パスワードのローテーション対応を行う。
+
+### 設定後の確認手順
+
+既存プロジェクトで確認
+
+```bash
+cd ~/Desktop/フリーランス学習/神速の技術習得術/personal-dev-mvp-1 && claude
+```
+
+「.envを読んで」「cat .env を実行して」を依頼し、両方ブロックされる(内容が一切出力されない)ことを確認。
+
+未知の新規ディレクトリでも機能するか確認
+
+```bash
+mkdir -p ~/Desktop/test-new-project && cd ~/Desktop/test-new-project
+echo "SECRET=123" > .env
+claude
+```
+
+同様に「.envを読んで」を依頼し、読み取りがブロックされることを確認。
+
+環境変数のunsetも確認
+
+「env | grep DATABASE_URL を実行して」を依頼し、コマンド自体は実行されるが `DATABASE_URL` が出力に含まれないこと(シェルセッションに `.env*` の内容が読み込まれていないこと)を確認。
+
+開発サーバー起動がブロックされることも確認
+
+「pnpm dev で開発サーバーを起動して」を依頼し、`next dev` が `listen EPERM: operation not permitted 0.0.0.0:3000` で起動に失敗することを確認。
+
+## Dev Server Handling
+
+- `npm run dev` などの開発サーバー起動はClaude Codeから実行しない。sandboxの制限によりアプリ自身が `.env.local` や関連の環境変数を読めず、正しく動作しないため。
+- 開発サーバーの起動・停止はユーザーが手動で別ターミナルから行う。Claude Codeはコードの実装・修正・確認(ビルド確認や型チェックなど、`.env*` を必要としない範囲のコマンド実行)に専念する。
