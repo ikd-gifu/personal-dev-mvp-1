@@ -1,3 +1,6 @@
+// TODO: service層からclient(DbClient型)への直接依存はレイヤー違反。
+// NoteRepository<DbClient> / ITransactionManager<DbClient> のジェネリック解消方法を検討し、解消する。
+// eslint-disable-next-line no-restricted-imports -- 既知の違反。上記TODO参照
 import type { DbClient } from "../../client/database";
 import type { AccountRepository } from "../../domain/account/interface";
 import type { NoteRepository } from "../../domain/note/interface";
